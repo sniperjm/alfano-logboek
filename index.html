@@ -114,6 +114,9 @@ details p{max-width:72ch;margin:6px 0}
 .fbitem ul{margin:4px 0 0;padding-left:18px}
 .fbitem li{margin:2px 0}
 .focus{background:var(--soft);border-radius:8px;padding:10px 14px;margin:8px 0 12px}
+.linkbtn{font:500 .9rem Barlow,sans-serif;background:none;border:1px solid var(--line);color:var(--muted);border-radius:6px;padding:4px 10px;cursor:pointer}
+.linkbtn:hover{border-color:var(--kerb);color:var(--kerb)}
+.grp{font:600 .95rem "Barlow Condensed",sans-serif;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:8px 0 2px}
 </style>
 </head>
 <body>
@@ -125,13 +128,13 @@ details p{max-width:72ch;margin:6px 0}
 <main>
   <label id="drop" tabindex="0">
     <strong>Sleep .alf2-bestanden hierheen of klik om te kiezen</strong>
-    <span>Meerdere tegelijk kan. Offline versie: alles blijft op dit apparaat, ook je notities.</span>
+    <span>Meerdere tegelijk kan. Alles blijft op dit apparaat, ook je notities.</span>
     <input id="file" type="file" accept=".alf2,.zip" multiple hidden>
   </label>
   <p id="msg" class="hint" role="status"></p>
   <div class="grid">
     <section class="panel">
-      <h2>Sessies</h2>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px"><h2>Sessies</h2><button id="clearAll" class="linkbtn" type="button">Alles wissen</button></div>
       <div id="list"><p class="empty">Nog geen sessies. Laad een .alf2-bestand om te beginnen.</p></div>
     </section>
     <section class="panel" id="detail"><p class="empty">Kies links een sessie.</p></section>
@@ -239,10 +242,12 @@ function sortedIds(){
 function renderList(){
   const ids = sortedIds(); const el = $("#list");
   if(!ids.length){ el.innerHTML = '<p class="empty">Nog geen sessies. Laad een .alf2-bestand om te beginnen.</p>'; return; }
-  el.innerHTML = ids.map(id => {
+  let lastTrack = null;
+  el.innerHTML = ids.slice().sort((a,b) => (store[a].summary.track||"").localeCompare(store[b].summary.track||"") || ids.indexOf(a)-ids.indexOf(b)).map(id => {
+    const tr = store[id].summary.track || "Onbekende baan"; const grp = tr !== lastTrack ? `<div class="grp">${esc(tr)}</div>` : ""; lastTrack = tr;
     const s = store[id], sm = s.summary, e = estGear(s);
     const tag = s.front && s.rear ? `<span class="tag set">${s.front}-${s.rear}</span>` : (e ? `<span class="tag est" title="Geschat uit toerental en snelheid">~${e.front}-${Math.round(e.rear)}</span>` : "");
-    return `<button class="sess${id===current?" active":""}" data-id="${esc(id)}">
+    return grp + `<button class="sess${id===current?" active":""}" data-id="${esc(id)}">
       <div class="t">${esc(sm.track || "Onbekende baan")} ${tag}</div>
       <div class="m">${esc(sm.date)} om ${esc(sm.time)} · ${esc(sm.driver||"")} · beste <span class="num">${fmtT(sm.best)}</span></div></button>`;
   }).join("");
@@ -255,7 +260,7 @@ function renderDetail(){
   const s = store[current], sm = s.summary, L = loaded[current], e = estGear(s), c = calib();
   const gearTxt = s.front && s.rear ? `${s.front}-${s.rear}` : (e ? `~${e.front}-${Math.round(e.rear)}` : "–");
   el.innerHTML = `
-    <h2>${esc(sm.track)} · ${esc(sm.date)} ${esc(sm.time)}</h2>
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap"><h2>${esc(sm.track)} · ${esc(sm.date)} ${esc(sm.time)}</h2><button id="delSess" class="linkbtn" type="button">Sessie verwijderen</button></div>
     <div class="stats">
       <div class="stat"><small>Beste ronde</small><b>${fmtT(sm.best)}</b><small>ronde ${sm.bestLap ?? "–"} van ${sm.laps}</small></div>
       <div class="stat"><small>Max toerental</small><b>${sm.maxRpm ? sm.maxRpm.toLocaleString("nl-NL") : "–"}</b></div>
@@ -280,6 +285,7 @@ function renderDetail(){
       <p><b>Twee rondes vergelijken.</b> Kies een tweede ronde: waar de stippellijn eerder of hoger omhoog gaat, was die ronde sneller uit de bocht. Dat is meestal waar de tijd zit.</p>
       <p><b>Toeren per km/u</b> hangt alleen af van tandwielen en bandmaat. Daarom kun je er bij oude sessies de overbrenging mee terugvinden.</p>
     </details>`;
+  $("#delSess").onclick = () => removeSessions([current], "Deze sessie verwijderen, inclusief je notities en tandwielen?");
   $("#notes").onsubmit = async ev => {
     ev.preventDefault(); const f = new FormData(ev.target);
     const num = v => v === "" ? null : +v;
@@ -460,10 +466,11 @@ function renderCorners(){
       const o = A.res[n]?.[k]; const bn = cc.value==="best" ? A.best[k] : +cc.value; const b = A.res[bn]?.[k];
       if(!o || !b) return "";
       const loss = o.dt - b.dt, msgs = (bn===n || loss < 0.03) ? [] : feedback(o,b,k,A);
+      if(bn!==n && loss >= 0.05 && !msgs.length) msgs.push(o.vin < b.vin - 1.5 ? `Komt ${f1(b.vin-o.vin)} km/u trager aan bij het rempunt: de tijd zit in het stuk vóór deze bocht.` : `Snelheden zijn bijna gelijk, toch ${loss.toFixed(2).replace(".",",")} s langzamer. Waarschijnlijk een wijdere lijn (meer meters) of later op volle snelheid. Vraag de coureur hoe hij deze bocht reed.`);
       const cls = bn===n || loss < 0.03 ? "ok" : "loss";
       const lossTxt = bn===n ? "referentie" : (loss>=0 ? "+" : "−") + Math.abs(loss).toFixed(2).replace(".",",") + " s";
       return `<div class="fbitem ${cls}"><div class="h"><span>Bocht ${k+1}</span><span class="num">${lossTxt}</span></div>
-        <div class="hint" style="margin:0">Rempunt ${Math.round(o.brake)} m (${f1(o.vin)} km/u) · minimum ${f1(o.vmin)} km/u · uitkomst ${f1(o.vex)} km/u${bn!==n?` <br>vergelijking ronde ${bn}: ${Math.round(b.brake)} m · ${f1(b.vmin)} · ${f1(b.vex)}`:""}</div>
+        <div class="hint" style="margin:0">${o.vin-o.vmin<3 ? "Geen remmen (hooguit gas los)" : `Rempunt ${Math.round(o.brake)} m (${f1(o.vin)} km/u)`} · minimum ${f1(o.vmin)} km/u · uitkomst ${f1(o.vex)} km/u${bn!==n?` <br>vergelijking ronde ${bn}: ${b.vin-b.vmin<3 ? "geen remmen" : `${Math.round(b.brake)} m (${f1(b.vin)} km/u)`} · ${f1(b.vmin)} · ${f1(b.vex)}`:""}</div>
         ${msgs.length ? `<ul>${msgs.map(m=>`<li>${m}</li>`).join("")}</ul>` : (bn!==n && loss < 0.03 ? `<ul><li>${loss <= -0.03 ? "Sneller dan de vergelijking. Kijk wat hij hier anders deed." : "Goed, gelijk aan de vergelijking."}</li></ul>` : "")}</div>`;
     }).join("");
   };
@@ -481,6 +488,19 @@ function trackSVG(A){
     <p class="hint" style="margin:4px 0 0">Zwart vierkant: start/finish van de meting.</p>`;
 }
 
+async function removeSessions(ids, question){
+  if(!ids.length || !confirm(question)) return;
+  for(const id of ids){
+    delete store[id]; delete loaded[id];
+    if(db){ try { await db.collection("data/users/me").doc(id).delete(); } catch(e){} }
+  }
+  try { localStorage.setItem("alfano-logboek", JSON.stringify(store)); } catch(e){}
+  if(ids.includes(current)) current = null;
+  if(chart){ chart.destroy(); chart = null; }
+  renderList(); renderDetail();
+  $("#msg").textContent = ids.length === 1 ? "Sessie verwijderd." : ids.length + " sessies verwijderd.";
+}
+document.getElementById("clearAll").onclick = () => removeSessions(Object.keys(store), "Alle sessies verwijderen, inclusief alle notities en tandwielen? Dit kan niet ongedaan worden.");
 // ---------- events ----------
 const drop = $("#drop"), inp = $("#file");
 drop.addEventListener("keydown", e => { if(e.key==="Enter"||e.key===" "){ e.preventDefault(); inp.click(); }});
