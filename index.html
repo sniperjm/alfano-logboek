@@ -307,7 +307,7 @@ function renderDetail(){
       <div class="stat"><small>Watertemperatuur</small><b>${sm.waterMax ? Math.round(sm.waterMax)+" °C" : (s.water ? esc(s.water)+" °C" : "–")}</b><small>${sm.waterMax ? (sm.waterMin ? "min "+Math.round(sm.waterMin)+" · max (sensor)" : "max (sensor)") : (s.water ? "handmatig" : "geen sensordata")}</small></div>
     </div>
     <div id="tips"></div>
-    ${gearCard(s, e, c)}
+    ${(() => { try { return gearCard(s, e, c); } catch(err){ console.error(err); return `<p class="err">Het tandwielblok kon niet worden gemaakt: ${esc(err.message)}</p>`; } })()}
     <h3>Notities bij deze sessie</h3>
     <form class="notes" id="notes">
       <label>Coureur<input name="driver" value="${esc(s.driver ?? sm.driver ?? "")}" placeholder="naam"></label>
@@ -323,7 +323,7 @@ function renderDetail(){
       <label class="wide">Overige notities<textarea name="notes" placeholder="Setup, sproeier, gevoel van de coureur…">${esc(s.notes)}</textarea></label>
       <div class="wide"><button class="primary" type="submit">Notities opslaan</button><span id="savedMsg" class="saved" role="status"></span></div>
     </form>
-    ${L ? lapSection(L) : `<p class="hint" style="margin-top:18px">De rondedata van deze sessie zijn niet geladen. Sleep het .alf2-bestand opnieuw hierheen om de rondes en grafiek te zien.</p>`}
+    ${L ? (() => { try { return lapSection(L); } catch(err){ console.error(err); return `<p class="err">De rondes konden niet worden getoond: ${esc(err.message)}</p>`; } })() : `<p class="hint" style="margin-top:18px">De rondedata van deze sessie zijn niet geladen. Sleep het .alf2-bestand opnieuw hierheen om de rondes en grafiek te zien.</p>`}
     <details><summary>Zo lees je de grafiek</summary>
       <p><b>Toerentallijn op het rechte stuk.</b> Blijft hij stijgen tot het rempunt, dan heeft de motor nog ruimte. Wordt hij een tijdje vlak vóór het remmen, dan loop je tegen het maximum aan en is de overbrenging te kort.</p>
       <p><b>Dalen in de lijn</b> zijn de bochten. Hoe lager het dal, hoe trager de bocht. Een hoger dal betekent meer snelheid door de bocht en een snellere uitkomst.</p>
@@ -340,7 +340,11 @@ function renderDetail(){
     $("#savedMsg").textContent = ok ? "Opgeslagen" : "Opslaan mislukt";
   };
   bindGearCard();
-  if(L){ drawChart(); drawTrend(); renderCorners(); renderTips(); }
+  if(L){
+    const safe = (fn, where, sel) => { try { fn(); } catch(err){ console.error(err); const t = sel && $(sel); if(t) t.innerHTML = `<p class="err">${where} kon niet worden gemaakt: ${esc(err.message)}</p>`; } };
+    safe(drawChart, "De grafiek", null); safe(drawTrend, "Het verloop", null);
+    safe(renderCorners, "De bochtanalyse", "#corners"); safe(renderTips, "De tips", "#tips");
+  }
 }
 
 function getPref(k, d){ try { const v = localStorage.getItem("alfano-pref-"+k); return v ? +v : d; } catch(e){ return d; } }
@@ -365,7 +369,15 @@ function gearCard(s, e, c){
     if(pick.top && pick.top > limit) why += ` Let op: op het rechte stuk kom je dan op ongeveer ${fmt(pick.top)}, boven je grens van ${fmt(limit)}. Kijk in de grafiek of het toerental daar vlak gaat lopen.`;
     if(sm.plateau >= 2) why += ` In ${sm.plateau} van de snelste rondes loopt het toerental al vlak vóór het rempunt.`;
     advice = `<div class="focus"><b>Advies: ${front}-${pick.r}${diff===0?" (zo laten)":diff>0?` (${diff} tand${diff>1?"en":""} meer achter)`:` (${-diff} tand${diff<-1?"en":""} minder achter)`}</b><br>${why}</div>`;
-    table = `<div class="tablewrap"><table class="gear"><thead><tr><th>Overbrenging</th><th>Laagste toeren in bocht</th><th>Max toeren rechte stuk</th><th></th></tr></thead><tbody>${opts.map(o => `<tr class="${o.r===pick.r?"pick":""}"><td>${front}-${o.r}</td><td>${fmt(o.low)}${o.low<bandLo?' <span class="warn">te laag</span>':o.low>bandHi?' <span class="muted">hoog</span>':' <span class="okk">goed</span>'}</td><td>${o.top ? fmt(o.top) : "–"}${o.top && o.top>limit?' <span class="warn">boven grens</span>':""}</td><td>${o.r===rear?"gereden":(o.r===pick.r?"<b>advies</b>":"")}</td></tr>`).join("")}</tbody></table></div>`;
+    const cur = rear/front, pr = pick.r/front, fr = x => x.toFixed(3).replace(".",",");
+    const combos = []; for(let f=10; f<=16; f++) for(let r=69; r<=90; r++) combos.push({f, r, q: r/f});
+    const req = low < bandLo ? cur*bandLo/low : low > bandHi ? cur*bandHi/low : null;
+    const equiv = combos.filter(x => Math.abs(x.q - pr) <= 0.04 && !(x.f === front && x.r === pick.r)).sort((a,b) => Math.abs(a.q-pr) - Math.abs(b.q-pr)).slice(0,6);
+    const finer = req ? combos.filter(x => diff > 0 ? (x.q >= req && x.q < pr - 0.005) : (x.q <= req && x.q > pr + 0.005)).sort((a,b) => diff > 0 ? a.q-b.q : b.q-a.q).slice(0,4) : [];
+    advice += `<p class="hint">Verhouding nu ${fr(cur)}${diff!==0 ? `, advies ${fr(pr)}${req ? ` (nodig om je doel te halen: ongeveer ${fr(req)})` : ""}` : ""}.
+      ${equiv.length ? `<br>Zelfde verhouding met een ander voortandwiel: ${equiv.map(x => `<b>${x.f}-${x.r}</b> (${fr(x.q)})`).join(", ")}.` : ""}
+      ${finer.length ? `<br>Fijnere tussenstap: ${finer.map(x => `<b>${x.f}-${x.r}</b> (${fr(x.q)}, laagste toeren ±${fmt(low*x.q/cur)})`).join(", ")}.` : ""}</p>`;
+    table = `<div class="tablewrap"><table class="gear"><thead><tr><th>Overbrenging</th><th>Verhouding</th><th>Laagste toeren in bocht</th><th>Max toeren rechte stuk</th><th></th></tr></thead><tbody>${opts.map(o => `<tr class="${o.r===pick.r?"pick":""}"><td>${front}-${o.r}</td><td>${(o.r/front).toFixed(3).replace(".",",")}</td><td>${fmt(o.low)}${o.low<bandLo?' <span class="warn">te laag</span>':o.low>bandHi?' <span class="muted">hoog</span>':' <span class="okk">goed</span>'}</td><td>${o.top ? fmt(o.top) : "–"}${o.top && o.top>limit?' <span class="warn">boven grens</span>':""}</td><td>${o.r===rear?"gereden":(o.r===pick.r?"<b>advies</b>":"")}</td></tr>`).join("")}</tbody></table></div>`;
     const L = loaded[current], A = L ? analyzeCorners(L) : null;
     if(A && sm.ratio){
       const fastL = [...L.table].sort((x,y)=>x.time-y.time).slice(0,5).map(r=>r.lap);
@@ -439,7 +451,7 @@ function simTable(s, front, rear, limit){
   const res = L.sim.res; if(!res) return "";
   const best = res.reduce((a,b) => b.dlap < a.dlap ? b : a);
   const edge = best.r === res[0].r || best.r === res[res.length-1].r;
-  return `<h3>Rondetijdsimulatie</h3><div class="tablewrap"><table class="gear"><thead><tr><th>Overbrenging</th><th>Verschil rondetijd</th><th>Topsnelheid (sim.)</th></tr></thead><tbody>${res.map(o => `<tr class="${o.r===best.r?"pick":""}"><td>${front}-${o.r}</td><td>${o.r===rear ? "gereden" : (o.dlap>=0?"+":"−")+Math.abs(o.dlap).toFixed(2).replace(".",",")+" s"}</td><td>${o.vtop.toFixed(1).replace(".",",")}</td></tr>`).join("")}</tbody></table></div>
+  return `<h3>Rondetijdsimulatie</h3><div class="tablewrap"><table class="gear"><thead><tr><th>Overbrenging</th><th>Verhouding</th><th>Verschil rondetijd</th><th>Topsnelheid (sim.)</th></tr></thead><tbody>${res.map(o => `<tr class="${o.r===best.r?"pick":""}"><td>${front}-${o.r}</td><td>${(o.r/front).toFixed(3).replace(".",",")}</td><td>${o.r===rear ? "gereden" : (o.dlap>=0?"+":"−")+Math.abs(o.dlap).toFixed(2).replace(".",",")+" s"}</td><td>${o.vtop.toFixed(1).replace(".",",")}</td></tr>`).join("")}</tbody></table></div>
   ${edge ? `<p class="hint"><b>Het snelste ligt aan de rand van de tabel.</b> De simulatie wijst die kant op, maar hoe verder van wat je reed, hoe onzekerder de uitkomst. Ga stap voor stap en controleer met de data van de volgende sessie.</p>` : ""}
   <p class="hint">Rekent per overbrenging uit hoe snel hij optrekt uit elke bocht. Bochtsnelheden en rempunten blijven gelijk. Het logboek gebruikt de typische vorm van een Rotax-vermogenscurve en past de sterkte daarvan en de luchtweerstand aan op het optrekken in deze sessie (gewicht 165 kg met coureur); boven je grens van ${Math.round(limit).toLocaleString("nl-NL")} toeren rekent hij met de begrenzer. Vooral onder 8.000 toeren is de curvevorm een aanname, dus zie dit als richting, niet als exacte tijd. Het advies hierboven (laagste toeren in de bochten) blijft leidend; gebruik de simulatie als tweede mening.</p>`;
 }
@@ -647,7 +659,7 @@ function avgMetrics(A, k){
 function consistencyLabel(sd){ return sd < 0.05 ? ["constant","okk"] : sd < 0.10 ? ["redelijk constant","muted"] : ["wisselend","warn"]; }
 function renderTips(){
   const box = $("#tips"), L = loaded[current]; if(!box || !L) return;
-  const A = analyzeCorners(L); if(!A){ box.innerHTML = ""; return; }
+  const A = analyzeCorners(L); if(!A || !A.corners.length){ box.innerHTML = ""; return; }
   const rows = A.corners.map((_,k) => { const {o, sd} = avgMetrics(A, k); const b = A.res[A.best[k]][k]; return {k, loss: o.dt - b.dt, o, b, sd}; }).sort((x,y) => y.loss - x.loss).slice(0,3);
   const f1 = x => x.toFixed(1).replace(".",",");
   box.innerHTML = `<div class="tipsbox"><h3 style="margin-top:0">3 tips voor de volgende sessie</h3><ol>${rows.map(r => {
@@ -661,11 +673,13 @@ function renderCorners(){
   const box = $("#corners"), L = loaded[current]; if(!box || !L) return;
   const A = analyzeCorners(L);
   if(!A){ box.innerHTML = `<p class="hint">Geen GPS-posities in deze sessie, daarom geen bochtanalyse.</p>`; return; }
+  if(!A.corners.length){ box.innerHTML = `<p class="hint">In deze sessie zijn geen duidelijke bochten gevonden (de snelheid zakt nergens minstens 8 km/u). Controleer of de GPS goed werkte.</p>`; return; }
   const opts = L.table.map(r => `<option value="${r.lap}">Ronde ${r.lap} (${fmtT(r.time)})</option>`).join("");
   const prevLap = box.querySelector("#cLap")?.value, prevCmp = box.querySelector("#cCmp")?.value;
   // waar zit structureel de meeste tijd
   const avgLoss = A.corners.map((_,k) => { const ls = Object.keys(A.res).map(n => A.res[n][k].dt - A.res[A.best[k]][k].dt); return ls.reduce((a,b)=>a+b,0)/ls.length; });
   const worst = avgLoss.map((v,k)=>[v,k]).sort((a,b)=>b[0]-a[0]).slice(0,2);
+  while(worst.length < 2) worst.push([0, worst.length ? worst[0][1] : 0]);
   box.innerHTML = `
     <h3>Bochtanalyse</h3>
     <div class="focus">Combineer je de beste versie van elke bocht uit deze sessie, dan kom je op ongeveer <b class="num">${fmtT(Math.round(A.ideal*1000))}</b>. Gemiddeld ligt de meeste tijd in <b>bocht ${worst[0][1]+1}</b> (${worst[0][0].toFixed(2).replace(".",",")} s per ronde) en <b>bocht ${worst[1][1]+1}</b> (${worst[1][0].toFixed(2).replace(".",",")} s).</div>
