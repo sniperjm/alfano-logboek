@@ -216,8 +216,14 @@ async function loadFile(file, restoring){
     const m = n.split("/").pop().match(/^LAP_(\d+)_.*\.csv$/i); if(!m) continue;
     const rows = parseCSV(await zip.file(n).async("string"));
     const h = rows[0].map(x=>x.trim()); const iR = h.indexOf("RPM"), iV = h.indexOf("Speed GPS"), iLa = h.indexOf("Lat."), iLo = h.indexOf("Lon.");
-    laps[+m[1]] = rows.slice(1).map(r => ({rpm:+r[iR], v:+r[iV]/10, lat: iLa>=0 ? +r[iLa]/1e6 : null, lon: iLo>=0 ? +r[iLo]/1e6 : null}));
+    laps[+m[1]] = rows.slice(1).map(r => ({rpm:+r[iR], v:+r[iV], lat: iLa>=0 ? +r[iLa]/1e6 : null, lon: iLo>=0 ? +r[iLo]/1e6 : null}));
   }
+  // De Alfano slaat snelheid soms op in tienden van km/u (1123 = 112,3) en soms gewoon in km/u: automatisch herkennen.
+  let rawMax = 0; Object.values(laps).forEach(rows => rows.forEach(p => { if(p.v > rawMax) rawMax = p.v; }));
+  const vScale = rawMax > 300 ? 10 : 1;
+  Object.values(laps).forEach(rows => rows.forEach(p => { p.v = p.v / vScale; }));
+  table.forEach(r => { if(r.maxV > 300) r.maxV /= 10; if(r.minV > 300 || (vScale === 10 && r.maxV > 0 && r.minV > r.maxV)) r.minV /= 10; });
+  table.forEach(r => { if(r.minV > r.maxV) r.minV /= 10; });
   const ratios = [];
   Object.values(laps).forEach(rows => rows.forEach(p => { if(p.v > 80 && p.rpm > 0) ratios.push(p.rpm/p.v); }));
   const ratio = median(ratios);
@@ -467,10 +473,11 @@ function bindGearCard(){
   $("#gBandHi").onchange = e => { setPref("bandhi", +e.target.value); renderDetail(); };
 }
 function lapSection(L){
-  const nS = Math.max(...L.table.map(r=>r.s.length));
+  const hasSectors = L.table.some(r => r.s.length > 1);
+  const nS = hasSectors ? Math.max(...L.table.map(r=>r.s.length)) : 0;
   const bestS = [...Array(nS)].map((_,i) => Math.min(...L.table.map(r=>r.s[i]||1e9)));
   const best = Math.min(...L.table.map(r=>r.time));
-  const theo = bestS.reduce((a,b)=>a+b,0);
+  const theo = hasSectors ? bestS.reduce((a,b)=>a+b,0) : null;
   const opts = L.table.map(r => `<option value="${r.lap}">Ronde ${r.lap} (${fmtT(r.time)})</option>`).join("");
   const bestLap = L.table.find(r => r.time === best).lap;
   return `
@@ -493,7 +500,7 @@ function lapSection(L){
     <div class="chartbox small"><canvas id="trendW" aria-label="Watertemperatuur per ronde"></canvas></div></div>
     <p class="hint">Hier zie je wanneer de banden op temperatuur zijn, of de tijden terugvallen, en of een aanpassing halverwege werkte.</p>
     <h3>Rondes</h3>
-    <p class="hint">Theoretisch beste ronde (beste sectoren opgeteld): <b class="num">${fmtT(theo)}</b>. Klik op een ronde om hem in de grafiek te zien.</p>
+    <p class="hint">${hasSectors ? `Theoretisch beste ronde (beste sectoren opgeteld): <b class="num">${fmtT(theo)}</b>.` : "Voor deze baan zijn geen sectoren ingesteld in de Alfano, daarom staan er geen sectortijden. De bochtanalyse geeft wel een ideale ronde."} Klik op een ronde om hem in de grafiek te zien.</p>
     <div class="tablewrap"><table>
       <thead><tr><th>Ronde</th><th>Tijd</th>${bestS.map((_,i)=>`<th>S${i+1}</th>`).join("")}<th>Min toeren</th><th>Max toeren</th><th>Min km/u</th><th>Max km/u</th></tr></thead>
       <tbody>${L.table.map(r => `<tr data-lap="${r.lap}" class="${r.time===best?"best":""}"><td>${r.lap}</td><td>${fmtT(r.time)}</td>${bestS.map((b,i)=>`<td class="${r.s[i]===b?"bs":""}">${fmtT(r.s[i])}</td>`).join("")}<td>${r.minRpm}</td><td>${r.maxRpm}</td><td>${r.minV.toFixed(1)}</td><td>${r.maxV.toFixed(1)}</td></tr>`).join("")}</tbody>
