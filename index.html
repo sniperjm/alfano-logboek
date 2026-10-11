@@ -125,6 +125,8 @@ table.gear tr.pick td{background:color-mix(in srgb,var(--good) 14%,transparent);
 .tipsbox{background:color-mix(in srgb,var(--kerb) 7%,var(--panel));border:1px solid color-mix(in srgb,var(--kerb) 35%,var(--line));border-radius:10px;padding:14px 16px;margin:4px 0 14px}
 .tipsbox ol{margin:6px 0 8px;padding-left:20px}
 .tipsbox li{margin:6px 0}
+.chartbox.small{height:200px}
+.charttitle{font:600 1rem "Barlow Condensed",sans-serif;margin:12px 0 2px;color:var(--muted)}
 </style>
 </head>
 <body>
@@ -465,9 +467,18 @@ function lapSection(L){
       <label>Ronde<select id="lapA">${opts}</select></label>
       <label>Vergelijk met<select id="lapB"><option value="">geen</option>${opts}</select></label>
     </div>
-    <div class="chartbox"><canvas id="chart" aria-label="Toerental en snelheid over de ronde"></canvas></div>
+    <p class="charttitle">Toerental</p>
+    <div class="chartbox small"><canvas id="chart" aria-label="Toerental over de ronde"></canvas></div>
+    <p class="charttitle">Snelheid</p>
+    <div class="chartbox small"><canvas id="chartV" aria-label="Snelheid over de ronde"></canvas></div>
+    <p class="hint">Doorgetrokken lijn: gekozen ronde. Stippellijn: vergelijkingsronde. Beide grafieken lopen gelijk op dezelfde afstand.</p>
     <h3>Verloop over de sessie</h3>
-    <div class="chartbox" style="height:240px"><canvas id="trend" aria-label="Rondetijd en topsnelheid per ronde"></canvas></div>
+    <p class="charttitle">Rondetijd per ronde</p>
+    <div class="chartbox small"><canvas id="trend" aria-label="Rondetijd per ronde"></canvas></div>
+    <p class="charttitle">Topsnelheid per ronde</p>
+    <div class="chartbox small"><canvas id="trendV" aria-label="Topsnelheid per ronde"></canvas></div>
+    <div id="trendWbox" hidden><p class="charttitle">Watertemperatuur per ronde</p>
+    <div class="chartbox small"><canvas id="trendW" aria-label="Watertemperatuur per ronde"></canvas></div></div>
     <p class="hint">Hier zie je wanneer de banden op temperatuur zijn, of de tijden terugvallen, en of een aanpassing halverwege werkte.</p>
     <h3>Rondes</h3>
     <p class="hint">Theoretisch beste ronde (beste sectoren opgeteld): <b class="num">${fmtT(theo)}</b>. Klik op een ronde om hem in de grafiek te zien.</p>
@@ -482,42 +493,42 @@ function lapSection(L){
 function series(rows, key){
   let d = 0; return rows.map(p => { d += p.v/3.6*0.1; return {x: Math.round(d), y: key === "v" ? p.v : p.rpm}; });
 }
-let trendChart = null;
+let trendCharts = [];
 function drawTrend(){
-  const L = loaded[current], cv = $("#trend"); if(!L || !cv) return;
+  const L = loaded[current]; if(!L || !$("#trend")) return;
   const css = getComputedStyle(document.documentElement), red = css.getPropertyValue("--kerb").trim(), blue = css.getPropertyValue("--blue").trim(), muted = css.getPropertyValue("--muted").trim(), line = css.getPropertyValue("--line").trim(), good = css.getPropertyValue("--good").trim();
-  const sm = store[current].summary; const ds = [
-    {label:"Rondetijd (s)", data:L.table.map(r=>r.time/1000), borderColor:red, backgroundColor:red, yAxisID:"y", tension:.2, pointRadius:3},
-    {label:"Topsnelheid (km/u)", data:L.table.map(r=>r.maxV), borderColor:blue, backgroundColor:blue, yAxisID:"y1", tension:.2, pointRadius:2, borderDash:[5,3]}];
-  if(sm.waterByLap && sm.waterByLap.some(x=>x)) ds.push({label:"Watertemp (°C)", data:sm.waterByLap, borderColor:good, backgroundColor:good, yAxisID:"y2", tension:.2, pointRadius:2});
-  if(trendChart) trendChart.destroy();
-  trendChart = new Chart(cv, {type:"line", data:{labels:L.table.map(r=>"R"+r.lap), datasets:ds}, options:{responsive:true, maintainAspectRatio:false, animation:false, interaction:{mode:"index", intersect:false},
-    scales:{x:{ticks:{color:muted}, grid:{color:line}}, y:{title:{display:true,text:"Rondetijd (s)",color:red}, ticks:{color:muted}, grid:{color:line}},
-      y1:{position:"right", title:{display:true,text:"km/u",color:blue}, ticks:{color:muted}, grid:{display:false}}, y2:{display:false}},
-    plugins:{legend:{labels:{color:muted, boxWidth:14}}}}});
+  trendCharts.forEach(c => c.destroy()); trendCharts = [];
+  const labels = L.table.map(r => "R" + r.lap), sm = store[current].summary;
+  const mk = (cv, data, title, fmt, color) => new Chart(cv, {type:"line", data:{labels, datasets:[{label:title, data, borderColor:color, backgroundColor:color, tension:.2, pointRadius:3}]},
+    options:{responsive:true, maintainAspectRatio:false, animation:false, plugins:{legend:{display:false}, tooltip:{callbacks:{label:i => fmt(i.parsed.y)}}},
+      scales:{x:{ticks:{color:muted}, grid:{color:line}}, y:{title:{display:true, text:title, color:color}, ticks:{color:muted, callback:v => fmt(v)}, grid:{color:line}}}}});
+  trendCharts.push(mk($("#trend"), L.table.map(r => r.time/1000), "seconden", v => Number(v).toFixed(2).replace(".",",") + " s", red));
+  trendCharts.push(mk($("#trendV"), L.table.map(r => r.maxV), "km/u", v => Number(v).toFixed(1).replace(".",",") + " km/u", blue));
+  if(sm.waterByLap && sm.waterByLap.some(x => x)){ $("#trendWbox").hidden = false; trendCharts.push(mk($("#trendW"), sm.waterByLap, "°C", v => Math.round(v) + " °C", good)); }
+}
+let chartV = null;
+function lineChart(cv, datasets, yTitle, unit, color){
+  const css = getComputedStyle(document.documentElement), muted = css.getPropertyValue("--muted").trim(), line = css.getPropertyValue("--line").trim();
+  return new Chart(cv, {type:"line", data:{datasets}, options:{
+    responsive:true, maintainAspectRatio:false, animation:false, interaction:{mode:"index", intersect:false},
+    scales:{ x:{type:"linear", title:{display:true, text:"Afstand op de baan (m)", color:muted}, ticks:{color:muted}, grid:{color:line}},
+             y:{title:{display:true, text:yTitle, color:color}, ticks:{color:muted, callback:v => Number(v).toLocaleString("nl-NL")}, grid:{color:line}} },
+    plugins:{legend:{labels:{color:muted, boxWidth:14}}, tooltip:{callbacks:{title:i => i[0].parsed.x + " m", label:i => `${i.dataset.label}: ${Math.round(i.parsed.y).toLocaleString("nl-NL")} ${unit}`}}}
+  }});
 }
 function drawChart(){
   const L = loaded[current]; const a = $("#lapA"), b = $("#lapB");
   if(!a.dataset.init){ a.value = a.dataset.best; a.dataset.init = 1; a.onchange = drawChart; b.onchange = drawChart;
-    document.querySelectorAll("tbody tr").forEach(tr => tr.onclick = () => { a.value = tr.dataset.lap; drawChart(); a.scrollIntoView({block:"nearest"}); }); }
-  const css = getComputedStyle(document.documentElement);
-  const red = css.getPropertyValue("--kerb").trim(), blue = css.getPropertyValue("--blue").trim(), muted = css.getPropertyValue("--muted").trim(), line = css.getPropertyValue("--line").trim();
-  const ds = [];
+    document.querySelectorAll("tbody tr[data-lap]").forEach(tr => tr.onclick = () => { a.value = tr.dataset.lap; drawChart(); a.scrollIntoView({block:"nearest"}); }); }
+  const css = getComputedStyle(document.documentElement), red = css.getPropertyValue("--kerb").trim(), blue = css.getPropertyValue("--blue").trim();
+  const dsR = [], dsV = [];
   const add = (lap, dash) => { const rows = L.laps[lap]; if(!rows) return;
-    ds.push({label:`Toeren ronde ${lap}`, data:series(rows,"rpm"), borderColor:red, borderDash:dash, yAxisID:"y", pointRadius:0, borderWidth:2, tension:.2});
-    ds.push({label:`km/u ronde ${lap}`, data:series(rows,"v"), borderColor:blue, borderDash:dash, yAxisID:"y1", pointRadius:0, borderWidth:1.6, tension:.2}); };
+    dsR.push({label:`Ronde ${lap}`, data:series(rows,"rpm"), borderColor:red, borderDash:dash, pointRadius:0, borderWidth:2, tension:.2});
+    dsV.push({label:`Ronde ${lap}`, data:series(rows,"v"), borderColor:blue, borderDash:dash, pointRadius:0, borderWidth:2, tension:.2}); };
   add(+a.value, []); if(b.value) add(+b.value, [6,4]);
-  if(chart) chart.destroy();
-  chart = new Chart($("#chart"), {type:"line", data:{datasets:ds}, options:{
-    responsive:true, maintainAspectRatio:false, animation:false, parsing:true,
-    interaction:{mode:"index", intersect:false},
-    scales:{
-      x:{type:"linear", title:{display:true, text:"Afstand (m)", color:muted}, ticks:{color:muted}, grid:{color:line}},
-      y:{title:{display:true, text:"Toeren/min", color:red}, ticks:{color:muted}, grid:{color:line}},
-      y1:{position:"right", title:{display:true, text:"km/u", color:blue}, ticks:{color:muted}, grid:{display:false}}
-    },
-    plugins:{legend:{labels:{color:muted, boxWidth:14}}, tooltip:{callbacks:{title:i => i[0].parsed.x + " m"}}}
-  }});
+  if(chart) chart.destroy(); if(chartV) chartV.destroy();
+  chart = lineChart($("#chart"), dsR, "Toeren per minuut", "toeren", red);
+  chartV = lineChart($("#chartV"), dsV, "km/u", "km/u", blue);
 }
 
 // ---------- bochtanalyse ----------
