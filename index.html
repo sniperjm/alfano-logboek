@@ -122,6 +122,9 @@ table.gear tr.pick td{background:color-mix(in srgb,var(--good) 14%,transparent);
 .warn{font:600 .8rem Barlow,sans-serif;color:var(--kerb)}
 .okk{font:600 .8rem Barlow,sans-serif;color:var(--good)}
 .muted{font:600 .8rem Barlow,sans-serif;color:var(--muted)}
+.tipsbox{background:color-mix(in srgb,var(--kerb) 7%,var(--panel));border:1px solid color-mix(in srgb,var(--kerb) 35%,var(--line));border-radius:10px;padding:14px 16px;margin:4px 0 14px}
+.tipsbox ol{margin:6px 0 8px;padding-left:20px}
+.tipsbox li{margin:6px 0}
 </style>
 </head>
 <body>
@@ -140,6 +143,7 @@ table.gear tr.pick td{background:color-mix(in srgb,var(--good) 14%,transparent);
   <div class="grid">
     <section class="panel">
       <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px"><h2>Sessies</h2><button id="clearAll" class="linkbtn" type="button">Alles wissen</button></div>
+      <div class="row" style="margin:0 0 10px"><button id="bkSave" class="linkbtn" type="button">Back-up opslaan</button><label class="linkbtn" style="display:inline-block">Back-up terugzetten<input id="bkLoad" type="file" accept=".json" hidden></label></div>
       <div id="list"><p class="empty">Nog geen sessies. Laad een .alf2-bestand om te beginnen.</p></div>
     </section>
     <section class="panel" id="detail"><p class="empty">Kies links een sessie.</p></section>
@@ -202,7 +206,8 @@ async function loadFile(file, restoring){
   const table = sum.slice(2).filter(r => r.length > 5).map(r => ({
     lap:+r[col("lap")], time:+r[col("time lap")],
     s:[+r[col("time partiel 1")], +r[col("time partiel 2")], +r[col("time partiel 3")], +r[col("time partiel 4")]].filter(x=>x>0),
-    minRpm:+r[col("Min RPM")], maxRpm:+r[col("Max RPM")], maxV:+r[col("Max Speed GPS")], minV:+r[col("Min Speed GPS")]
+    minRpm:+r[col("Min RPM")], maxRpm:+r[col("Max RPM")], maxV:+r[col("Max Speed GPS")], minV:+r[col("Min Speed GPS")],
+    tMin: col("Min T1")>=0 ? +r[col("Min T1")] : null, tMax: col("Max T1")>=0 ? +r[col("Max T1")] : null
   })).filter(r => r.time > 0);
   const laps = {};
   for(const n of names){
@@ -221,7 +226,7 @@ async function loadFile(file, restoring){
     date: head[0], time: head[1], track: (head[4]||"").replace(/\*/g,"").replace(/\s+/g," ").trim(),
     driver: head[5], laps: valid.length, best: best ? best.time : null, bestLap: best ? best.lap : null,
     maxRpm: Math.max(...valid.map(r=>r.maxRpm)), maxV: Math.max(...valid.map(r=>r.maxV)),
-    ratio: ratio ? +ratio.toFixed(2) : null, file: file.name, ...rpmStats(valid, laps)
+    ratio: ratio ? +ratio.toFixed(2) : null, file: file.name, ...rpmStats(valid, laps), ...waterStats(valid)
   };
   loaded[id] = {laps, table: valid};
   if(restoring && !store[id]) { delete loaded[id]; await idbDel(id); return id; }
@@ -230,6 +235,11 @@ async function loadFile(file, restoring){
   return id;
 }
 
+function waterStats(valid){
+  const ok = x => x != null && x > 1 && x < 150;
+  const mx = valid.map(r => r.tMax).filter(ok), mn = valid.map(r => r.tMin).filter(ok);
+  return mx.length ? {waterMax: Math.max(...mx), waterMin: mn.length ? Math.min(...mn) : null, waterByLap: valid.map(r => ok(r.tMax) ? r.tMax : null)} : {waterMax: null};
+}
 function rpmStats(valid, laps){
   const fast = [...valid].sort((a,b)=>a.time-b.time).slice(0,5);
   const med = a => { const s=[...a].sort((x,y)=>x-y); return s.length ? s[Math.floor(s.length/2)] : null; };
@@ -292,11 +302,21 @@ function renderDetail(){
       <div class="stat"><small>Topsnelheid</small><b>${sm.maxV ? sm.maxV.toFixed(1).replace(".",",") : "–"}</b><small>km/u (GPS)</small></div>
       <div class="stat"><small>Toeren per km/u</small><b>${sm.ratio ? String(sm.ratio).replace(".",",") : "–"}</b><small>vingerafdruk van de overbrenging</small></div>
       <div class="stat"><small>Tandwielen</small><b>${gearTxt}</b><small>${s.front&&s.rear ? "ingevuld" : "geschat"}</small></div>
+      <div class="stat"><small>Watertemperatuur</small><b>${sm.waterMax ? Math.round(sm.waterMax)+" °C" : (s.water ? esc(s.water)+" °C" : "–")}</b><small>${sm.waterMax ? (sm.waterMin ? "min "+Math.round(sm.waterMin)+" · max (sensor)" : "max (sensor)") : (s.water ? "handmatig" : "geen sensordata")}</small></div>
     </div>
+    <div id="tips"></div>
     ${gearCard(s, e, c)}
     <h3>Notities bij deze sessie</h3>
     <form class="notes" id="notes">
-      <label>Banden<input name="tyres" value="${esc(s.tyres)}" placeholder="bijv. nieuw, 0,62 bar"></label>
+      <label>Coureur<input name="driver" value="${esc(s.driver ?? sm.driver ?? "")}" placeholder="naam"></label>
+      <label>Banden (set / staat)<input name="tyres" value="${esc(s.tyres)}" placeholder="bijv. set 2, 3e sessie"></label>
+      <label>Spanning koud (bar)<input name="pCold" value="${esc(s.pCold)}" placeholder="bijv. 0,60"></label>
+      <label>Spanning warm (bar)<input name="pHot" value="${esc(s.pHot)}" placeholder="bijv. 0,72"></label>
+      <label>Sproeier<input name="jet" value="${esc(s.jet)}" placeholder="bijv. 125"></label>
+      <label>Spoorbreedte voor<input name="trackF" value="${esc(s.trackF)}" placeholder="mm of stand"></label>
+      <label>Spoorbreedte achter<input name="trackR" value="${esc(s.trackR)}" placeholder="mm"></label>
+      <label>Achteras<input name="axle" value="${esc(s.axle)}" placeholder="bijv. medium"></label>
+      <label>Watertemp handmatig (°C)<input name="water" value="${esc(s.water)}" placeholder="als geen sensor"></label>
       <label>Weer / baan<input name="weather" value="${esc(s.weather)}" placeholder="bijv. droog, 18 °C"></label>
       <label class="wide">Overige notities<textarea name="notes" placeholder="Setup, sproeier, gevoel van de coureur…">${esc(s.notes)}</textarea></label>
       <div class="wide"><button class="primary" type="submit">Notities opslaan</button><span id="savedMsg" class="saved" role="status"></span></div>
@@ -312,13 +332,13 @@ function renderDetail(){
   $("#notes").onsubmit = async ev => {
     ev.preventDefault(); const f = new FormData(ev.target);
     const num = v => v === "" ? null : +v;
-    Object.assign(store[current], {tyres:f.get("tyres"), weather:f.get("weather"), notes:f.get("notes")});
+    ["driver","tyres","pCold","pHot","jet","trackF","trackR","axle","water","weather","notes"].forEach(k => store[current][k] = f.get(k));
     const ok = await save(current);
     renderList(); renderDetail();
     $("#savedMsg").textContent = ok ? "Opgeslagen" : "Opslaan mislukt";
   };
   bindGearCard();
-  if(L){ drawChart(); renderCorners(); }
+  if(L){ drawChart(); drawTrend(); renderCorners(); renderTips(); }
 }
 
 function getPref(k, d){ try { const v = localStorage.getItem("alfano-pref-"+k); return v ? +v : d; } catch(e){ return d; } }
@@ -363,7 +383,7 @@ function gearCard(s, e, c){
       <button class="primary" id="gSave" type="button">Opslaan</button><span id="gMsg" class="saved" role="status"></span>
     </div>
     <p class="hint">${known ? "Ingevuld door jou." : (e ? `<span class="warn">Nog niet ingevuld.</span> Het advies rekent nu met de schatting <b>~${e.front}-${Math.round(e.rear)}</b> uit de data. Vul in waar je echt mee reed.` : "")}</p>
-    ${advice}${table}${cornerTxt}
+    ${advice}${table}${simTable(s, front, rear, limit)}${cornerTxt}
     <div class="row" style="margin-top:10px">
       <label>Doel laagste toeren: van<input id="gBandLo" type="number" step="100" value="${bandLo}"></label>
       <label>tot<input id="gBandHi" type="number" step="100" value="${bandHi}"></label>
@@ -372,6 +392,54 @@ function gearCard(s, e, c){
     <p class="hint">Het advies kijkt naar het laagste toerental in de bochten van de 5 snelste rondes. Zit dat binnen je doel, dan blijft de overbrenging zo. Te laag: meer tanden achter. Te hoog: minder tanden achter. De grens op het rechte stuk is alleen een controle.</p>
     ${histTxt}
   </div>`;
+}
+// Typische vorm van de vermogenscurve van een Rotax Senior (relatief, 1 = piek). Aanname, geen meting.
+const P_SHAPE = [[5000,.25],[6000,.35],[7000,.45],[8000,.58],[9000,.72],[10000,.85],[11000,.95],[11750,1],[12500,.98],[13000,.94],[13500,.88],[14000,.80],[14500,.70],[15000,.58],[15500,.45]];
+const tShape = rpm => interp(rpm, P_SHAPE.map(x=>x[0]), P_SHAPE.map(x=>x[1])) / Math.max(rpm, 5000) * 10000;
+function simGear(L, A, sm, rear, opts, limit){
+  const m = 165, Rr = 0.025*m*9.81, dt = 0.01;
+  const fast = [...L.table].sort((a,b)=>a.time-b.time).slice(0,5).map(r=>r.lap);
+  const P = prepLaps({laps: Object.fromEntries(fast.map(n => [n, L.laps[n]]))}, A.lat0, A.lon0);
+  // fit: m*a + Rr = k*T(rpm) - c*v^2  (kleinste kwadraten in k en c)
+  let sTT=0, sTV=0, sVV=0, sTY=0, sVY=0, n=0;
+  fast.forEach(id => { const p = P[id]; if(!p) return; for(let i=1;i<p.v.length-1;i++){
+    const v = p.v[i]/3.6, a = (p.v[i+1]-p.v[i-1])/3.6/0.2;
+    if(a > 0.2 && p.rpm[i] > 7000 && p.rpm[i+1] >= p.rpm[i-1]){ const T = tShape(p.rpm[i]), V = -v*v, Y = m*a + Rr;
+      sTT+=T*T; sTV+=T*V; sVV+=V*V; sTY+=T*Y; sVY+=V*Y; n++; } } });
+  if(n < 30) return null;
+  const det = sTT*sVV - sTV*sTV; if(Math.abs(det) < 1e-9) return null;
+  let k = (sTY*sVV - sVY*sTV)/det, c = (sTT*sVY - sTV*sTY)/det;
+  if(!(c > 0.15 && c < 0.8)){ c = Math.min(0.8, Math.max(0.15, c)); k = (sTY - c*sTV)/sTT; }
+  const Fcurve = rpm => rpm >= limit ? 0 : k*tShape(Math.max(rpm, 6000));
+  const ref = A.ref, v = ref.v, d = ref.dist;
+  // zuivere optrekstukken: van elk dal in de snelheid tot de volgende top (hysterese 2 km/u)
+  const segs = []; let dir = 0, hiI = 0, loI = 0, segStart = 0;
+  for(let i=1;i<v.length;i++){
+    if(dir >= 0 && v[i] > v[hiI]) hiI = i;
+    if(dir <= 0 && v[i] < v[loI]) loI = i;
+    if(dir >= 0 && v[hiI] - v[i] > 2){ if(hiI > segStart || dir === 1) segs.push([dir === 1 ? segStart : 0, hiI]); dir = -1; loI = i; }
+    else if(dir <= 0 && v[i] - v[loI] > 2){ dir = 1; segStart = loI; hiI = i; }
+  }
+  if(dir === 1) segs.push([segStart, v.length-1]);
+  const runSeg = (i0, i1, q) => { let vv = v[i0]/3.6, x = 0, t = 0, vmax = 0; const D = d[i1]-d[i0]; if(D <= 0) return {t:0, vmax: vmax*3.6};
+    while(x < D && t < 30){ const rpm = vv*3.6*sm.ratio*q; const acc = (Fcurve(rpm)*q - c*vv*vv - Rr)/m; vv = Math.max(1, vv + acc*dt); x += vv*dt; t += dt; vmax = Math.max(vmax, vv); }
+    return {t, vmax: vmax*3.6}; };
+  const base = segs.map(([a,b]) => ({meas: (b-a)*0.1, sim: runSeg(a,b,1)}));
+  return opts.map(r => { const q = r/rear; let dtot = 0, vtop = 0;
+    segs.forEach(([a,b], i) => { const s1 = runSeg(a,b,q); const scale = base[i].sim.t > 0 ? base[i].meas/base[i].sim.t : 1; dtot += (s1.t - base[i].sim.t)*scale; vtop = Math.max(vtop, s1.vmax); });
+    return {r, dlap: dtot, vtop}; });
+}
+function simTable(s, front, rear, limit){
+  const L = loaded[current]; if(!L || !rear || !s.summary.ratio) return "";
+  const A = analyzeCorners(L); if(!A) return "";
+  const opts = []; for(let r = rear-3; r <= rear+3; r++) opts.push(r);
+  if(!L.sim || L.sim.key !== rear+"|"+limit) L.sim = {key: rear+"|"+limit, res: simGear(L, A, s.summary, rear, opts, limit)};
+  const res = L.sim.res; if(!res) return "";
+  const best = res.reduce((a,b) => b.dlap < a.dlap ? b : a);
+  const edge = best.r === res[0].r || best.r === res[res.length-1].r;
+  return `<h3>Rondetijdsimulatie</h3><div class="tablewrap"><table class="gear"><thead><tr><th>Overbrenging</th><th>Verschil rondetijd</th><th>Topsnelheid (sim.)</th></tr></thead><tbody>${res.map(o => `<tr class="${o.r===best.r?"pick":""}"><td>${front}-${o.r}</td><td>${o.r===rear ? "gereden" : (o.dlap>=0?"+":"−")+Math.abs(o.dlap).toFixed(2).replace(".",",")+" s"}</td><td>${o.vtop.toFixed(1).replace(".",",")}</td></tr>`).join("")}</tbody></table></div>
+  ${edge ? `<p class="hint"><b>Het snelste ligt aan de rand van de tabel.</b> De simulatie wijst die kant op, maar hoe verder van wat je reed, hoe onzekerder de uitkomst. Ga stap voor stap en controleer met de data van de volgende sessie.</p>` : ""}
+  <p class="hint">Rekent per overbrenging uit hoe snel hij optrekt uit elke bocht. Bochtsnelheden en rempunten blijven gelijk. Het logboek gebruikt de typische vorm van een Rotax-vermogenscurve en past de sterkte daarvan en de luchtweerstand aan op het optrekken in deze sessie (gewicht 165 kg met coureur); boven je grens van ${Math.round(limit).toLocaleString("nl-NL")} toeren rekent hij met de begrenzer. Vooral onder 8.000 toeren is de curvevorm een aanname, dus zie dit als richting, niet als exacte tijd. Het advies hierboven (laagste toeren in de bochten) blijft leidend; gebruik de simulatie als tweede mening.</p>`;
 }
 function bindGearCard(){
   const sv = $("#gSave"); if(!sv) return;
@@ -398,6 +466,9 @@ function lapSection(L){
       <label>Vergelijk met<select id="lapB"><option value="">geen</option>${opts}</select></label>
     </div>
     <div class="chartbox"><canvas id="chart" aria-label="Toerental en snelheid over de ronde"></canvas></div>
+    <h3>Verloop over de sessie</h3>
+    <div class="chartbox" style="height:240px"><canvas id="trend" aria-label="Rondetijd en topsnelheid per ronde"></canvas></div>
+    <p class="hint">Hier zie je wanneer de banden op temperatuur zijn, of de tijden terugvallen, en of een aanpassing halverwege werkte.</p>
     <h3>Rondes</h3>
     <p class="hint">Theoretisch beste ronde (beste sectoren opgeteld): <b class="num">${fmtT(theo)}</b>. Klik op een ronde om hem in de grafiek te zien.</p>
     <div class="tablewrap"><table>
@@ -410,6 +481,20 @@ function lapSection(L){
 
 function series(rows, key){
   let d = 0; return rows.map(p => { d += p.v/3.6*0.1; return {x: Math.round(d), y: key === "v" ? p.v : p.rpm}; });
+}
+let trendChart = null;
+function drawTrend(){
+  const L = loaded[current], cv = $("#trend"); if(!L || !cv) return;
+  const css = getComputedStyle(document.documentElement), red = css.getPropertyValue("--kerb").trim(), blue = css.getPropertyValue("--blue").trim(), muted = css.getPropertyValue("--muted").trim(), line = css.getPropertyValue("--line").trim(), good = css.getPropertyValue("--good").trim();
+  const sm = store[current].summary; const ds = [
+    {label:"Rondetijd (s)", data:L.table.map(r=>r.time/1000), borderColor:red, backgroundColor:red, yAxisID:"y", tension:.2, pointRadius:3},
+    {label:"Topsnelheid (km/u)", data:L.table.map(r=>r.maxV), borderColor:blue, backgroundColor:blue, yAxisID:"y1", tension:.2, pointRadius:2, borderDash:[5,3]}];
+  if(sm.waterByLap && sm.waterByLap.some(x=>x)) ds.push({label:"Watertemp (°C)", data:sm.waterByLap, borderColor:good, backgroundColor:good, yAxisID:"y2", tension:.2, pointRadius:2});
+  if(trendChart) trendChart.destroy();
+  trendChart = new Chart(cv, {type:"line", data:{labels:L.table.map(r=>"R"+r.lap), datasets:ds}, options:{responsive:true, maintainAspectRatio:false, animation:false, interaction:{mode:"index", intersect:false},
+    scales:{x:{ticks:{color:muted}, grid:{color:line}}, y:{title:{display:true,text:"Rondetijd (s)",color:red}, ticks:{color:muted}, grid:{color:line}},
+      y1:{position:"right", title:{display:true,text:"km/u",color:blue}, ticks:{color:muted}, grid:{display:false}}, y2:{display:false}},
+    plugins:{legend:{labels:{color:muted, boxWidth:14}}}}});
 }
 function drawChart(){
   const L = loaded[current]; const a = $("#lapA"), b = $("#lapB");
@@ -543,6 +628,24 @@ function feedback(o, b, k, A){
   if(o.relift && !b.relift) out.push(`Na het laagste punt zakt de snelheid nog even terug. Teken dat hij te vroeg gas gaf en moest corrigeren.`);
   return out;
 }
+function avgMetrics(A, k){
+  const ls = Object.keys(A.res).map(n => A.res[n][k]).filter(Boolean); const m = f => ls.reduce((s,o)=>s+o[f],0)/ls.length;
+  const dts = ls.map(o=>o.dt), mean = dts.reduce((a,b)=>a+b,0)/dts.length, sd = Math.sqrt(dts.reduce((s,x)=>s+(x-mean)**2,0)/dts.length);
+  return {o:{brake:m("brake"), vin:m("vin"), vmin:m("vmin"), apex:m("apex"), vex:m("vex"), dt:mean, relift: ls.filter(o=>o.relift).length/ls.length > 0.3}, sd};
+}
+function consistencyLabel(sd){ return sd < 0.05 ? ["constant","okk"] : sd < 0.10 ? ["redelijk constant","muted"] : ["wisselend","warn"]; }
+function renderTips(){
+  const box = $("#tips"), L = loaded[current]; if(!box || !L) return;
+  const A = analyzeCorners(L); if(!A){ box.innerHTML = ""; return; }
+  const rows = A.corners.map((_,k) => { const {o, sd} = avgMetrics(A, k); const b = A.res[A.best[k]][k]; return {k, loss: o.dt - b.dt, o, b, sd}; }).sort((x,y) => y.loss - x.loss).slice(0,3);
+  const f1 = x => x.toFixed(1).replace(".",",");
+  box.innerHTML = `<div class="tipsbox"><h3 style="margin-top:0">3 tips voor de volgende sessie</h3><ol>${rows.map(r => {
+    let msg = feedback(r.o, r.b, r.k, A)[0];
+    if(!msg) msg = r.o.vin < r.b.vin - 1.5 ? `Hij komt gemiddeld ${f1(r.b.vin-r.o.vin)} km/u trager aan: beter uit de bocht ervóór komen.` : `Snelheden zijn gemiddeld gelijk aan zijn beste: let op de lijn, zo strak mogelijk.`;
+    const [cl, cc] = consistencyLabel(r.sd);
+    return `<li><b>Bocht ${r.k+1}</b> <span class="num">(${r.loss.toFixed(2).replace(".",",")} s per ronde te winnen)</span>: ${msg} <span class="${cc}">Rijdt deze bocht ${cl}.</span></li>`;
+  }).join("")}</ol><p class="hint" style="margin:0">Gemiddeld over alle rondes, vergeleken met zijn beste versie van elke bocht in deze sessie.</p></div>`;
+}
 function renderCorners(){
   const box = $("#corners"), L = loaded[current]; if(!box || !L) return;
   const A = analyzeCorners(L);
@@ -557,7 +660,7 @@ function renderCorners(){
     <div class="focus">Combineer je de beste versie van elke bocht uit deze sessie, dan kom je op ongeveer <b class="num">${fmtT(Math.round(A.ideal*1000))}</b>. Gemiddeld ligt de meeste tijd in <b>bocht ${worst[0][1]+1}</b> (${worst[0][0].toFixed(2).replace(".",",")} s per ronde) en <b>bocht ${worst[1][1]+1}</b> (${worst[1][0].toFixed(2).replace(".",",")} s).</div>
     <div class="row">
       <label>Ronde<select id="cLap">${opts}</select></label>
-      <label>Vergelijk met<select id="cCmp"><option value="best">Beste per bocht (deze sessie)</option><optgroup label="Deze sessie">${opts}</optgroup>${otherSessions(A).map(id => { const s2 = store[id]?.summary || {}; return `<optgroup label="Sessie ${esc(s2.date)} ${esc(s2.time)}${store[id]?.front&&store[id]?.rear ? " ("+store[id].front+"-"+store[id].rear+")" : ""}">${loaded[id].table.map(r => `<option value="x|${esc(id)}|${r.lap}">Ronde ${r.lap} (${fmtT(r.time)})${r.lap===s2.bestLap?" snelste":""}</option>`).join("")}</optgroup>`; }).join("")}</select></label>
+      <label>Vergelijk met<select id="cCmp"><option value="best">Beste per bocht (deze sessie)</option><optgroup label="Deze sessie">${opts}</optgroup>${otherSessions(A).map(id => { const s2 = store[id]?.summary || {}; return `<optgroup label="${esc(store[id]?.driver || s2.driver || "")} · ${esc(s2.date)} ${esc(s2.time)}${store[id]?.front&&store[id]?.rear ? " ("+store[id].front+"-"+store[id].rear+")" : ""}">${loaded[id].table.map(r => `<option value="x|${esc(id)}|${r.lap}">Ronde ${r.lap} (${fmtT(r.time)})${r.lap===s2.bestLap?" snelste":""}</option>`).join("")}</optgroup>`; }).join("")}</select></label>
     </div>
     <div class="cwrap"><div class="map">${trackSVG(A)}</div><div class="fb" id="fb"></div></div>
     <p class="hint">Rempunt, minimum en uitkomst komen uit de GPS-snelheid; de Alfano meet geen gas of rem. Verschillen kleiner dan ongeveer 5 meter of 1 km/u vallen binnen de meetonnauwkeurigheid.</p>`;
@@ -565,32 +668,42 @@ function renderCorners(){
   cl.value = prevLap || A.bestLap; cc.value = prevCmp || "best";
   const draw = () => {
     const n = +cl.value, f1 = x => x.toFixed(1).replace(".",",");
+    const colors = [];
     $("#fb").innerHTML = A.corners.map((c,k) => {
       const o = A.res[n]?.[k]; let bn, b, label;
-      if(cc.value.startsWith("x|")){ const [, xid, xl] = cc.value.split("|"); const m = otherMetrics(A, xid, +xl); b = m?.[k]; bn = -1; const s2 = store[xid]?.summary || {}; label = `sessie ${s2.date} ronde ${xl}`; }
+      if(cc.value.startsWith("x|")){ const [, xid, xl] = cc.value.split("|"); const m = otherMetrics(A, xid, +xl); b = m?.[k]; bn = -1; const s2 = store[xid]?.summary || {}; label = `${store[xid]?.driver || s2.driver || "sessie"} ${s2.date} ronde ${xl}`; }
       else { bn = cc.value==="best" ? A.best[k] : +cc.value; b = A.res[bn]?.[k]; label = `ronde ${bn}`; }
       if(!o || !b) return "";
       const loss = o.dt - b.dt, msgs = (bn===n || loss < 0.03) ? [] : feedback(o,b,k,A);
       if(bn!==n && loss >= 0.05 && !msgs.length) msgs.push(o.vin < b.vin - 1.5 ? `Komt ${f1(b.vin-o.vin)} km/u trager aan bij het rempunt: de tijd zit in het stuk vóór deze bocht.` : `Snelheden zijn bijna gelijk, toch ${loss.toFixed(2).replace(".",",")} s langzamer. Waarschijnlijk een wijdere lijn (meer meters) of later op volle snelheid. Vraag de coureur hoe hij deze bocht reed.`);
       const cls = bn===n || loss < 0.03 ? "ok" : "loss";
+      colors[k] = bn===n ? null : loss;
       const lossTxt = bn===n ? "referentie" : (loss>=0 ? "+" : "−") + Math.abs(loss).toFixed(2).replace(".",",") + " s";
-      return `<div class="fbitem ${cls}"><div class="h"><span>Bocht ${k+1}</span><span class="num">${lossTxt}</span></div>
+      const [cl, ccl] = consistencyLabel(avgMetrics(A, k).sd);
+      return `<div class="fbitem ${cls}"><div class="h"><span>Bocht ${k+1} <span class="${ccl}" style="font-family:Barlow,sans-serif">· ${cl}</span></span><span class="num">${lossTxt}</span></div>
         <div class="hint" style="margin:0">${o.vin-o.vmin<3 ? "Geen remmen (hooguit gas los)" : `Rempunt ${Math.round(o.brake)} m (${f1(o.vin)} km/u)`} · minimum ${f1(o.vmin)} km/u · uitkomst ${f1(o.vex)} km/u${bn!==n?` <br>vergelijking ${label}: ${b.vin-b.vmin<3 ? "geen remmen" : `${Math.round(b.brake)} m (${f1(b.vin)} km/u)`} · ${f1(b.vmin)} · ${f1(b.vex)}`:""}</div>
         ${msgs.length ? `<ul>${msgs.map(m=>`<li>${m}</li>`).join("")}</ul>` : (bn!==n && loss < 0.03 ? `<ul><li>${loss <= -0.03 ? "Sneller dan de vergelijking. Kijk wat hij hier anders deed." : "Goed, gelijk aan de vergelijking."}</li></ul>` : "")}</div>`;
     }).join("");
+    $(".map").innerHTML = trackSVG(A, colors);
   };
   cl.onchange = draw; cc.onchange = draw; draw();
 }
-function trackSVG(A){
+function lossColor(loss){
+  if(loss == null) return "var(--muted)";
+  if(loss <= -0.02) return "#1D7A46"; if(loss < 0.03) return "#7DBE8F";
+  if(loss < 0.08) return "#E8A33D"; return "#C8102E";
+}
+function trackSVG(A, colors){
   const xs = A.ref.x, ys = A.ref.y, pad = 14;
   const minX = Math.min(...xs)-pad, maxX = Math.max(...xs)+pad, minY = Math.min(...ys)-pad, maxY = Math.max(...ys)+pad;
   const pts = xs.map((x,i) => `${(x-minX).toFixed(1)},${(maxY-ys[i]).toFixed(1)}`).join(" ");
   const labels = A.corners.map((c,k) => `<circle cx="${(c.ax-minX).toFixed(1)}" cy="${(maxY-c.ay).toFixed(1)}" r="9" fill="var(--kerb)"/><text x="${(c.ax-minX).toFixed(1)}" y="${(maxY-c.ay+4).toFixed(1)}" text-anchor="middle" font-size="11" font-weight="700" fill="#fff" font-family="Barlow Condensed,sans-serif">${k+1}</text>`).join("");
   const sx = (xs[0]-minX).toFixed(1), sy = (maxY-ys[0]).toFixed(1);
   return `<svg viewBox="0 0 ${(maxX-minX).toFixed(0)} ${(maxY-minY).toFixed(0)}" role="img" aria-label="Baankaart met bochtnummers">
-    <polyline points="${pts}" fill="none" stroke="var(--muted)" stroke-width="6" stroke-linejoin="round" stroke-linecap="round"/>
+    <polyline points="${pts}" fill="none" stroke="var(--line)" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"/>
+    ${A.corners.map((c,k) => { const seg = xs.map((x,i)=>i).filter(i => A.ref.dist[i] >= c.s && A.ref.dist[i] <= c.e); if(seg.length < 2) return ""; return `<polyline points="${seg.map(i => `${(xs[i]-minX).toFixed(1)},${(maxY-ys[i]).toFixed(1)}`).join(" ")}" fill="none" stroke="${lossColor(colors ? colors[k] : null)}" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"/>`; }).join("")}
     <rect x="${sx-5}" y="${sy-5}" width="10" height="10" fill="var(--ink)"/>${labels}</svg>
-    <p class="hint" style="margin:4px 0 0">Zwart vierkant: start/finish van de meting.</p>`;
+    <p class="hint" style="margin:4px 0 0"><span style="color:#1D7A46">■</span> sneller · <span style="color:#7DBE8F">■</span> gelijk · <span style="color:#E8A33D">■</span> iets trager · <span style="color:#C8102E">■</span> veel trager · zwart vierkant: start/finish</p>`;
 }
 
 async function removeSessions(ids, question){
@@ -606,6 +719,28 @@ async function removeSessions(ids, question){
   $("#msg").textContent = ids.length === 1 ? "Sessie verwijderd." : ids.length + " sessies verwijderd.";
 }
 document.getElementById("clearAll").onclick = () => removeSessions(Object.keys(store), "Alle sessies verwijderen, inclusief alle notities en tandwielen? Dit kan niet ongedaan worden.");
+function b64(buf){ let s = ""; const u = new Uint8Array(buf); for(let i=0;i<u.length;i+=0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i+0x8000)); return btoa(s); }
+function unb64(str){ const s = atob(str), u = new Uint8Array(s.length); for(let i=0;i<s.length;i++) u[i] = s.charCodeAt(i); return u.buffer; }
+async function exportBackup(){
+  const files = {}; for(const [id, rec] of await idbAll()) if(rec && rec.buf && store[id]) files[id] = {name: rec.name, data: b64(rec.buf)};
+  const prefs = {}; ["limit","bandlo","bandhi"].forEach(k => prefs[k] = getPref(k, null));
+  const blob = new Blob([JSON.stringify({app:"alfano-logboek", version:1, saved:new Date().toISOString(), store, files, prefs})], {type:"application/json"});
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "alfano-logboek-backup-" + new Date().toISOString().slice(0,10) + ".json";
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  $("#msg").textContent = "Back-up opgeslagen met " + Object.keys(store).length + " sessie(s).";
+}
+async function importBackup(file){
+  try {
+    const data = JSON.parse(await file.text()); if(data.app !== "alfano-logboek") throw new Error("Dit is geen back-up van het Alfano logboek.");
+    for(const id in data.store){ store[id] = {...(store[id]||{}), ...data.store[id]}; await save(id); }
+    for(const id in (data.files||{})){ const f = data.files[id]; await idbPut(id, {name: f.name, buf: unb64(f.data)}); }
+    for(const k in (data.prefs||{})) if(data.prefs[k] != null) setPref(k, data.prefs[k]);
+    await restoreFiles(); renderList(); renderDetail();
+    $("#msg").textContent = "Back-up teruggezet: " + Object.keys(data.store).length + " sessie(s).";
+  } catch(e){ $("#msg").innerHTML = '<span class="err">' + esc(e.message || "Terugzetten mislukt") + "</span>"; }
+}
+document.getElementById("bkSave").onclick = exportBackup;
+document.getElementById("bkLoad").onchange = e => { if(e.target.files[0]) importBackup(e.target.files[0]); e.target.value = ""; };
 // ---------- events ----------
 const drop = $("#drop"), inp = $("#file");
 drop.addEventListener("keydown", e => { if(e.key==="Enter"||e.key===" "){ e.preventDefault(); inp.click(); }});
