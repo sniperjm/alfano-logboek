@@ -117,6 +117,9 @@ details p{max-width:72ch;margin:6px 0}
 .linkbtn{font:500 .9rem Barlow,sans-serif;background:none;border:1px solid var(--line);color:var(--muted);border-radius:6px;padding:4px 10px;cursor:pointer}
 .linkbtn:hover{border-color:var(--kerb);color:var(--kerb)}
 .grp{font:600 .95rem "Barlow Condensed",sans-serif;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:8px 0 2px}
+.gearcard{border:1px solid var(--line);border-radius:10px;padding:14px;margin:6px 0 4px}
+table.gear tr.pick td{background:color-mix(in srgb,var(--good) 14%,transparent);font-weight:700}
+.warn{font:600 .8rem Barlow,sans-serif;color:var(--kerb)}
 </style>
 </head>
 <body>
@@ -205,7 +208,7 @@ async function loadFile(file){
     date: head[0], time: head[1], track: (head[4]||"").replace(/\*/g,"").replace(/\s+/g," ").trim(),
     driver: head[5], laps: valid.length, best: best ? best.time : null, bestLap: best ? best.lap : null,
     maxRpm: Math.max(...valid.map(r=>r.maxRpm)), maxV: Math.max(...valid.map(r=>r.maxV)),
-    ratio: ratio ? +ratio.toFixed(2) : null, file: file.name
+    ratio: ratio ? +ratio.toFixed(2) : null, file: file.name, ...rpmStats(valid, laps)
   };
   loaded[id] = {laps, table: valid};
   store[id] = {...(store[id]||{}), summary};
@@ -213,6 +216,14 @@ async function loadFile(file){
   return id;
 }
 
+function rpmStats(valid, laps){
+  const fast = [...valid].sort((a,b)=>a.time-b.time).slice(0,5);
+  const med = a => { const s=[...a].sort((x,y)=>x-y); return s.length ? s[Math.floor(s.length/2)] : null; };
+  let plateau = 0;
+  fast.forEach(r => { const rows = laps[r.lap]; if(!rows) return; let im=0; rows.forEach((p,i)=>{ if(p.rpm>rows[im].rpm) im=i; });
+    if(im>=6 && rows.slice(im-6,im+1).every(p => rows[im].rpm - p.rpm < 120)) plateau++; });
+  return {topRpm: med(fast.map(r=>r.maxRpm)), lowRpm: med(fast.map(r=>r.minRpm)), plateau, plateauOf: fast.length};
+}
 async function handleFiles(files){
   const msg = $("#msg"); let last = null, ok = 0, errs = [];
   msg.textContent = "Bezig met inlezen…";
@@ -268,16 +279,14 @@ function renderDetail(){
       <div class="stat"><small>Toeren per km/u</small><b>${sm.ratio ? String(sm.ratio).replace(".",",") : "–"}</b><small>vingerafdruk van de overbrenging</small></div>
       <div class="stat"><small>Tandwielen</small><b>${gearTxt}</b><small>${s.front&&s.rear ? "ingevuld" : "geschat"}</small></div>
     </div>
+    ${gearCard(s, e, c)}
     <h3>Notities bij deze sessie</h3>
     <form class="notes" id="notes">
-      <label>Voortandwiel<input name="front" type="number" min="8" max="20" value="${s.front??""}" placeholder="${e?e.front:12}"></label>
-      <label>Achtertandwiel<input name="rear" type="number" min="50" max="100" value="${s.rear??""}" placeholder="${e?Math.round(e.rear):""}"></label>
       <label>Banden<input name="tyres" value="${esc(s.tyres)}" placeholder="bijv. nieuw, 0,62 bar"></label>
       <label>Weer / baan<input name="weather" value="${esc(s.weather)}" placeholder="bijv. droog, 18 °C"></label>
       <label class="wide">Overige notities<textarea name="notes" placeholder="Setup, sproeier, gevoel van de coureur…">${esc(s.notes)}</textarea></label>
       <div class="wide"><button class="primary" type="submit">Notities opslaan</button><span id="savedMsg" class="saved" role="status"></span></div>
     </form>
-    <p class="hint">${e && !(s.front&&s.rear) ? `De schatting ~${e.front}-${Math.round(e.rear)} komt uit de verhouding toerental/snelheid. ` : ""}${c.n ? `Geijkt op ${c.n} sessie(s) waar je de tandwielen hebt ingevuld.` : "Nog niet geijkt: vul bij een sessie waarvan je de tandwielen zeker weet de juiste waarden in, dan worden alle schattingen nauwkeuriger."} Bij dezelfde bandenmaat klopt de schatting meestal op ongeveer 1 tand.</p>
     ${L ? lapSection(L) : `<p class="hint" style="margin-top:18px">De rondedata van deze sessie zijn niet geladen. Sleep het .alf2-bestand opnieuw hierheen om de rondes en grafiek te zien.</p>`}
     <details><summary>Zo lees je de grafiek</summary>
       <p><b>Toerentallijn op het rechte stuk.</b> Blijft hij stijgen tot het rempunt, dan heeft de motor nog ruimte. Wordt hij een tijdje vlak vóór het remmen, dan loop je tegen het maximum aan en is de overbrenging te kort.</p>
@@ -289,14 +298,65 @@ function renderDetail(){
   $("#notes").onsubmit = async ev => {
     ev.preventDefault(); const f = new FormData(ev.target);
     const num = v => v === "" ? null : +v;
-    Object.assign(store[current], {front:num(f.get("front")), rear:num(f.get("rear")), tyres:f.get("tyres"), weather:f.get("weather"), notes:f.get("notes")});
+    Object.assign(store[current], {tyres:f.get("tyres"), weather:f.get("weather"), notes:f.get("notes")});
     const ok = await save(current);
     renderList(); renderDetail();
     $("#savedMsg").textContent = ok ? "Opgeslagen" : "Opslaan mislukt";
   };
+  bindGearCard();
   if(L){ drawChart(); renderCorners(); }
 }
 
+function getPref(k, d){ try { const v = localStorage.getItem("alfano-pref-"+k); return v ? +v : d; } catch(e){ return d; } }
+function setPref(k, v){ try { localStorage.setItem("alfano-pref-"+k, v); } catch(e){} }
+function gearCard(s, e, c){
+  const sm = s.summary, known = s.front && s.rear;
+  const front = s.front || (e ? e.front : 12), rear = s.rear || (e ? Math.round(e.rear) : null);
+  const limit = getPref("limit", 14800), minOk = getPref("minok", 6000);
+  let advice = "", table = "";
+  const top = sm.topRpm || sm.maxRpm, low = sm.lowRpm;
+  if(rear && top){
+    const opts = []; for(let r = rear-3; r <= rear+3; r++){ const f = (r/front)/(rear/front); opts.push({r, top: Math.round(top*f), low: low ? Math.round(low*f) : null}); }
+    let pick = opts.filter(o => o.top <= limit).pop() || opts[0];
+    if(sm.plateau >= 2 && pick.r >= rear) pick = opts.find(o => o.r === rear-1);
+    table = `<div class="tablewrap"><table class="gear"><thead><tr><th>Overbrenging</th><th>Max toeren rechte stuk</th><th>Laagste toeren in bocht</th><th></th></tr></thead><tbody>${opts.map(o => `<tr class="${o.r===pick.r?"pick":""}"><td>${front}-${o.r}</td><td>${o.top.toLocaleString("nl-NL")}${o.top>limit?' <span class="warn">boven grens</span>':""}</td><td>${o.low ? o.low.toLocaleString("nl-NL") : "–"}${o.low && o.low<minOk?' <span class="warn">laag</span>':""}</td><td>${o.r===rear?"gereden":(o.r===pick.r?"<b>advies</b>":"")}</td></tr>`).join("")}</tbody></table></div>`;
+    const why = sm.plateau >= 2 ? `In ${sm.plateau} van de ${sm.plateauOf} snelste rondes loopt het toerental vlak vóór het rempunt: de motor zit aan zijn max. Ga langer (kleiner achtertandwiel).`
+      : (pick.r > rear ? `Geen vlak stuk vóór het remmen: de motor heeft nog ruimte. Een korter tandwiel geeft betere uitkomsten uit de bochten zolang je onder je grens van ${limit.toLocaleString("nl-NL")} blijft.`
+      : pick.r < rear ? `Het toerental op het rechte stuk komt boven je grens van ${limit.toLocaleString("nl-NL")}. Ga langer.`
+      : `Deze overbrenging zit precies goed voor je grens van ${limit.toLocaleString("nl-NL")} toeren.`);
+    advice = `<div class="focus"><b>Advies voor ${esc(sm.track)}: ${front}-${pick.r}</b><br>${why}</div>`;
+  } else if(!sm.topRpm){
+    advice = `<p class="hint">Laad het .alf2-bestand opnieuw om een advies te krijgen.</p>`;
+  }
+  const hist = Object.values(store).filter(x => x.summary && x.summary.track === sm.track && x !== s);
+  const histTxt = hist.length ? `<h3>Eerder op deze baan</h3><div class="tablewrap"><table><thead><tr><th>Datum</th><th>Overbrenging</th><th>Beste ronde</th><th>Max toeren</th></tr></thead><tbody>${hist.map(x => { const g = estGear(x); return `<tr><td>${esc(x.summary.date)}</td><td>${x.front&&x.rear ? x.front+"-"+x.rear : (g ? "~"+g.front+"-"+Math.round(g.rear) : "–")}</td><td>${fmtT(x.summary.best)}</td><td>${(x.summary.topRpm||x.summary.maxRpm||0).toLocaleString("nl-NL")}</td></tr>`; }).join("")}</tbody></table></div>` : "";
+  return `<div class="gearcard">
+    <h3 style="margin-top:0">Overbrenging</h3>
+    <div class="row">
+      <label>Gereden met: voor<input id="gFront" type="number" min="8" max="20" value="${s.front??""}" placeholder="bijv. 12"></label>
+      <label>achter<input id="gRear" type="number" min="50" max="100" value="${s.rear??""}" placeholder="bijv. 76"></label>
+      <button class="primary" id="gSave" type="button">Opslaan</button><span id="gMsg" class="saved" role="status"></span>
+    </div>
+    <p class="hint">${known ? "Ingevuld door jou." : (e ? `Nog niet ingevuld. Uit de data geschat: <b>~${e.front}-${Math.round(e.rear)}</b>. Vul in waar je echt mee reed, dan rekent alles daarmee.` : "")} ${c.n ? `Schattingen bij andere sessies zijn geijkt op ${c.n} sessie(s) die je hebt ingevuld.` : ""}</p>
+    ${advice}${table}
+    <div class="row" style="margin-top:10px">
+      <label>Max toerental dat je wilt halen<input id="gLimit" type="number" step="100" value="${limit}"></label>
+      <label>Laagste toerental in bocht (waarschuwing onder)<input id="gMinOk" type="number" step="100" value="${minOk}"></label>
+    </div>
+    <p class="hint">Het advies kiest de kortste overbrenging die onder jouw maximum blijft, want op bochtige banen wint een korte overbrenging bij het uitkomen. Stel het maximum in op wat jij voor jouw motor wilt aanhouden.</p>
+    ${histTxt}
+  </div>`;
+}
+function bindGearCard(){
+  const sv = $("#gSave"); if(!sv) return;
+  sv.onclick = async () => {
+    const f = $("#gFront").value, r = $("#gRear").value;
+    store[current].front = f === "" ? null : +f; store[current].rear = r === "" ? null : +r;
+    const ok = await save(current); renderList(); renderDetail(); $("#gMsg").textContent = ok ? "Opgeslagen" : "Opslaan mislukt";
+  };
+  $("#gLimit").onchange = e => { setPref("limit", +e.target.value); renderDetail(); };
+  $("#gMinOk").onchange = e => { setPref("minok", +e.target.value); renderDetail(); };
+}
 function lapSection(L){
   const nS = Math.max(...L.table.map(r=>r.s.length));
   const bestS = [...Array(nS)].map((_,i) => Math.min(...L.table.map(r=>r.s[i]||1e9)));
