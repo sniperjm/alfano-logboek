@@ -138,6 +138,10 @@ ul.motor li{margin:5px 0}
 .ibtn:hover,.ibtn:focus-visible{border-color:var(--kerb);color:var(--kerb)}
 .ipop{position:absolute;z-index:50;background:var(--ink);color:var(--panel);font:400 .9rem/1.45 Barlow,sans-serif;padding:10px 12px;border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.25)}
 th .ibtn{width:16px;height:16px;font-size:10px}
+.prof{display:flex;justify-content:space-between;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:6px 0;background:var(--soft)}
+.prof .m{color:var(--muted);font-size:.86rem}
+details#pform summary{list-style:none}
+details#pform summary::-webkit-details-marker{display:none}
 </style>
 </head>
 <body>
@@ -158,6 +162,7 @@ th .ibtn{width:16px;height:16px;font-size:10px}
       <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px"><h2>Sessies <button type="button" class="ibtn" data-info="sessies" aria-label="Uitleg">i</button></h2><button id="clearAll" class="linkbtn" type="button">Alles wissen</button></div>
       <div class="row" style="margin:0 0 10px"><button id="bkSave" class="linkbtn" type="button">Back-up opslaan</button><button type="button" class="ibtn" data-info="backup" aria-label="Uitleg">i</button><label class="linkbtn" style="display:inline-block">Back-up terugzetten<input id="bkLoad" type="file" accept=".json" hidden></label></div>
       <div id="list"><p class="empty">Nog geen sessies. Laad een .alf2-bestand om te beginnen.</p></div>
+      <div id="profiles"></div>
     </section>
     <section class="panel" id="detail"><p class="empty">Kies links een sessie.</p></section>
   </div>
@@ -172,6 +177,32 @@ const $ = s => document.querySelector(s);
 const fmtT = ms => { if(!ms) return "–"; const s = ms/1000; const m = Math.floor(s/60); return (m? m+":"+(s%60).toFixed(2).padStart(5,"0") : s.toFixed(2)).replace(".",","); };
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
+// ---------- profielen ----------
+const ENGINES = {
+  rotax_sr: {name:"Rotax Max Senior", water:{zomer:[50,55], winter:[55,60]}, band:[6000,6500], limit:14800},
+  rotax_jr: {name:"Rotax Max Junior", water:{zomer:[50,55], winter:[55,60]}},
+  rotax_mini: {name:"Rotax Mini / Micro Max", water:{zomer:[50,55], winter:[55,60]}},
+  rotax_dd2: {name:"Rotax DD2 (2 versnellingen)", water:{zomer:[50,55], winter:[55,60]}, gearbox:true},
+  x30_sr: {name:"IAME X30 Senior", water:{zomer:[48,52], winter:[55,60]}},
+  x30_jr: {name:"IAME X30 Junior", water:{zomer:[48,52], winter:[55,60]}, limit:16000},
+  rok: {name:"Vortex ROK", water:{zomer:[48,52], winter:[55,60]}},
+  ok: {name:"OK / OK-Junior", water:{zomer:[48,52], winter:[55,60]}},
+  kz: {name:"KZ (schakelbak)", water:{zomer:[48,52], winter:[55,60]}, gearbox:true},
+  other: {name:"Andere motor", water:{zomer:[50,55], winter:[55,60]}}
+};
+let profiles = {};
+try { profiles = JSON.parse(localStorage.getItem("alfano-profiles") || "{}") || {}; } catch(e){}
+async function saveProfiles(){
+  try { localStorage.setItem("alfano-profiles", JSON.stringify(profiles)); } catch(e){}
+  if(db){ try { await db.collection("data/users/me").doc("_profiles").set({profiles: JSON.parse(JSON.stringify(profiles))}); } catch(e){} }
+}
+const curProfile = () => profiles[store[current]?.profile] || null;
+function tgt(key, def){ const pr = curProfile(); if(pr && pr[key] != null && pr[key] !== "") return +pr[key]; return getPref(key, def); }
+function setTgt(key, v){ const pr = curProfile(); if(pr){ pr[key] = v; saveProfiles(); } else setPref(key, v); }
+function engineDefaults(engId, season){
+  const e = ENGINES[engId] || ENGINES.other, w = e.water[season || "zomer"];
+  const out = {wlo: w[0], whi: w[1]}; if(e.band){ out.bandlo = e.band[0]; out.bandhi = e.band[1]; } if(e.limit) out.limit = e.limit; return out;
+}
 // ---------- opslag ----------
 async function initStore(){
   try { const raw = localStorage.getItem("alfano-logboek"); if(raw) store = JSON.parse(raw) || {}; } catch(e){}
@@ -182,7 +213,8 @@ async function initStore(){
     uid = user ? await user.id() : null;
     if(db){
       const snap = await db.collection("data/users/me").get();
-      snap.docs.forEach(d => { if(d.exists) store[d.id] = {...(store[d.id]||{}), ...d.data()}; });
+      snap.docs.forEach(d => { if(!d.exists) return; if(d.id === "_profiles"){ profiles = {...profiles, ...(d.data().profiles||{})}; return; } store[d.id] = {...(store[d.id]||{}), ...d.data()}; });
+      renderProfiles();
       renderList(); if(current) renderDetail();
     }
   } catch(e){ db = null; }
@@ -226,8 +258,8 @@ async function loadFile(file, restoring){
   for(const n of names){
     const m = n.split("/").pop().match(/^LAP_(\d+)_.*\.csv$/i); if(!m) continue;
     const rows = parseCSV(await zip.file(n).async("string"));
-    const h = rows[0].map(x=>x.trim()); const iR = h.indexOf("RPM"), iV = h.indexOf("Speed GPS"), iLa = h.indexOf("Lat."), iLo = h.indexOf("Lon.");
-    laps[+m[1]] = rows.slice(1).map(r => ({rpm:+r[iR], v:+r[iV], lat: iLa>=0 ? +r[iLa]/1e6 : null, lon: iLo>=0 ? +r[iLo]/1e6 : null}));
+    const h = rows[0].map(x=>x.trim()); const iR = h.indexOf("RPM"), iV = h.indexOf("Speed GPS"), iLa = h.indexOf("Lat."), iLo = h.indexOf("Lon."), iO = h.indexOf("Orientation");
+    laps[+m[1]] = rows.slice(1).map(r => ({rpm:+r[iR], v:+r[iV], lat: iLa>=0 ? +r[iLa]/1e6 : null, lon: iLo>=0 ? +r[iLo]/1e6 : null, hd: iO>=0 ? +r[iO]/100 : null}));
   }
   // De Alfano slaat snelheid soms op in tienden van km/u (1123 = 112,3) en soms gewoon in km/u: automatisch herkennen.
   let rawMax = 0; Object.values(laps).forEach(rows => rows.forEach(p => { if(p.v > rawMax) rawMax = p.v; }));
@@ -305,7 +337,7 @@ function renderList(){
     const tag = s.front && s.rear ? `<span class="tag set">${s.front}-${s.rear}</span>` : (e ? `<span class="tag est" title="Geschat uit toerental en snelheid">~${e.front}-${Math.round(e.rear)}</span>` : "");
     return grp + `<button class="sess${id===current?" active":""}" data-id="${esc(id)}">
       <div class="t">${esc(sm.track || "Onbekende baan")} ${tag}</div>
-      <div class="m">${esc(sm.date)} om ${esc(sm.time)} · ${esc(s.driver||sm.driver||"")} · beste <span class="num">${fmtT(sm.best)}</span></div>${s.conclusion ? `<div class="m concl-line">${esc(s.conclusion)}</div>` : ""}</button>`;
+      <div class="m">${esc(sm.date)} om ${esc(sm.time)} · ${esc(s.driver||sm.driver||"")} · beste <span class="num">${fmtT(sm.best)}</span>${s.profile && profiles[s.profile] ? ` · ${esc(profiles[s.profile].name)}` : ""}</div>${s.conclusion ? `<div class="m concl-line">${esc(s.conclusion)}</div>` : ""}</button>`;
   }).join("");
   el.querySelectorAll(".sess").forEach(b => b.onclick = () => { current = b.dataset.id; renderList(); renderDetail(); });
 }
@@ -323,9 +355,9 @@ function renderDetail(){
       <div class="stat"><small>Topsnelheid ${info("s_top")}</small><b>${sm.maxV ? sm.maxV.toFixed(1).replace(".",",") : "–"}</b><small>km/u (GPS)</small></div>
       <div class="stat"><small>Toeren per km/u ${info("s_ratio")}</small><b>${sm.ratio ? String(sm.ratio).replace(".",",") : "–"}</b><small>vingerafdruk van de overbrenging</small></div>
       <div class="stat"><small>Tandwielen ${info("s_tandwiel")}</small><b>${gearTxt}</b><small>${s.front&&s.rear ? "ingevuld" : "geschat"}</small></div>
-      <div class="stat"><small>Watertemperatuur ${info("s_water")}</small><b>${sm.waterMax ? Math.round(sm.waterMax)+" °C" : (s.water ? esc(s.water)+" °C" : "–")}</b><small>${(() => { const lo = getPref("wlo",50), hi = getPref("whi",55), w = sm.waterMax || (s.water ? +String(s.water).replace(",",".") : null); if(!w) return "geen sensordata"; const st = w > hi ? '<span class="warn">te warm</span>' : (sm.waterMin && sm.waterMin < lo) || w < lo ? '<span class="warn">te koud</span>' : '<span class="okk">binnen doel</span>'; return (sm.waterMax ? (sm.waterMin ? "min "+Math.round(sm.waterMin)+" · max · " : "max · ") : "handmatig · ") + st; })()}</small></div>
+      <div class="stat"><small>Watertemperatuur ${info("s_water")}</small><b>${sm.waterMax ? Math.round(sm.waterMax)+" °C" : (s.water ? esc(s.water)+" °C" : "–")}</b><small>${(() => { const lo = tgt("wlo", 50), hi = tgt("whi", 55), w = sm.waterMax || (s.water ? +String(s.water).replace(",",".") : null); if(!w) return "geen sensordata"; const st = w > hi ? '<span class="warn">te warm</span>' : (sm.waterMin && sm.waterMin < lo) || w < lo ? '<span class="warn">te koud</span>' : '<span class="okk">binnen doel</span>'; return (sm.waterMax ? (sm.waterMin ? "min "+Math.round(sm.waterMin)+" · max · " : "max · ") : "handmatig · ") + st; })()}</small></div>
     </div>
-    <div class="concl"><label>Conclusie van deze sessie ${info("conclusie")}<input id="conclIn" value="${esc(s.conclusion)}" placeholder="Wat veranderd · wat zei de data · wat is de volgende stap"></label><button class="primary" id="conclSave" type="button">Opslaan</button><span id="conclMsg" class="saved" role="status"></span></div>
+    <div class="concl"><label style="flex:0 1 220px">Kart-profiel ${info("profielkeuze")}<select id="profSel"><option value="">Geen profiel</option>${Object.entries(profiles).map(([id,p]) => `<option value="${id}"${s.profile===id?" selected":""}>${esc(p.name)}</option>`).join("")}</select></label><label>Conclusie van deze sessie ${info("conclusie")}<input id="conclIn" value="${esc(s.conclusion)}" placeholder="Wat veranderd · wat zei de data · wat is de volgende stap"></label><button class="primary" id="conclSave" type="button">Opslaan</button><span id="conclMsg" class="saved" role="status"></span></div>
     <div id="tips"></div>
     <div id="motor"></div>
     ${(() => { try { return gearCard(s, e, c); } catch(err){ console.error(err); return `<p class="err">Het tandwielblok kon niet worden gemaakt: ${esc(err.message)}</p>`; } })()}
@@ -362,6 +394,9 @@ function renderDetail(){
     $("#savedMsg").textContent = ok ? "Opgeslagen" : "Opslaan mislukt";
   };
   bindGearCard();
+  $("#profSel").onchange = async e => { const id = e.target.value; store[current].profile = id || null; const p = profiles[id];
+    if(p){ if(p.driver && !store[current].driver) store[current].driver = p.driver; if(p.front && p.rear && !(store[current].front && store[current].rear)){ store[current].front = p.front; store[current].rear = p.rear; } }
+    const L = loaded[current]; if(L) L.sim = null; await save(current); renderList(); renderDetail(); };
   $("#conclSave").onclick = async () => { store[current].conclusion = $("#conclIn").value; const ok = await save(current); renderList(); $("#conclMsg").textContent = ok ? "Opgeslagen" : "Opslaan mislukt"; };
   if(L){
     const safe = (fn, where, sel) => { try { fn(); } catch(err){ console.error(err); const t = sel && $(sel); if(t) t.innerHTML = `<p class="err">${where} kon niet worden gemaakt: ${esc(err.message)}</p>`; } };
@@ -373,9 +408,11 @@ function renderDetail(){
 function getPref(k, d){ try { const v = localStorage.getItem("alfano-pref-"+k); return v ? +v : d; } catch(e){ return d; } }
 function setPref(k, v){ try { localStorage.setItem("alfano-pref-"+k, v); } catch(e){} }
 function gearCard(s, e, c){
+  const pr = curProfile(), eng = pr ? ENGINES[pr.engine] : null;
+  if(eng && eng.gearbox) return `<div class="gearcard"><h3 style="margin-top:0">Overbrenging ${info("overbrenging")}</h3><p class="hint">Deze sessie hoort bij een motor met versnellingsbak (${esc(eng.name)}). Het tandwieladvies werkt alleen voor motoren zonder schakelbak, omdat het toerental bij schakelen per versnelling anders is. De toerentallen per bocht en de bochtanalyse werken wel gewoon.</p></div>`;
   const sm = s.summary, known = s.front && s.rear;
   const front = s.front || (e ? e.front : 12), rear = s.rear || (e ? Math.round(e.rear) : null);
-  const bandLo = getPref("bandlo", 6000), bandHi = getPref("bandhi", 6500), limit = getPref("limit", 14800);
+  const bandLo = tgt("bandlo", 6000), bandHi = tgt("bandhi", 6500), limit = tgt("limit", 14800);
   const top = sm.topRpm || sm.maxRpm, low = sm.lowRpm;
   const fmt = x => Math.round(x).toLocaleString("nl-NL");
   let advice = "", table = "", cornerTxt = "";
@@ -434,7 +471,7 @@ function gearCard(s, e, c){
 const P_SHAPE = [[5000,.25],[6000,.35],[7000,.45],[8000,.58],[9000,.72],[10000,.85],[11000,.95],[11750,1],[12500,.98],[13000,.94],[13500,.88],[14000,.80],[14500,.70],[15000,.58],[15500,.45]];
 const tShape = rpm => interp(rpm, P_SHAPE.map(x=>x[0]), P_SHAPE.map(x=>x[1])) / Math.max(rpm, 5000) * 10000;
 function simGear(L, A, sm, rear, opts, limit){
-  const m = 165, Rr = 0.025*m*9.81, dt = 0.01;
+  const m = (curProfile()?.mass) || 165, Rr = 0.025*m*9.81, dt = 0.01;
   const fast = [...L.table].sort((a,b)=>a.time-b.time).slice(0,5).map(r=>r.lap);
   const P = prepLaps({laps: Object.fromEntries(fast.map(n => [n, L.laps[n]]))}, A.lat0, A.lon0);
   // fit: m*a + Rr = k*T(rpm) - c*v^2  (kleinste kwadraten in k en c)
@@ -470,7 +507,7 @@ function simTable(s, front, rear, limit){
   const L = loaded[current]; if(!L || !rear || !s.summary.ratio) return "";
   const A = analyzeCorners(L); if(!A) return "";
   const opts = []; for(let r = rear-3; r <= rear+3; r++) opts.push(r);
-  if(!L.sim || L.sim.key !== rear+"|"+limit) L.sim = {key: rear+"|"+limit, res: simGear(L, A, s.summary, rear, opts, limit)};
+  if(!L.sim || L.sim.key !== rear+"|"+limit+"|"+(curProfile()?.mass||165)) L.sim = {key: rear+"|"+limit+"|"+(curProfile()?.mass||165), res: simGear(L, A, s.summary, rear, opts, limit)};
   const res = L.sim.res; if(!res) return "";
   const best = res.reduce((a,b) => b.dlap < a.dlap ? b : a);
   const edge = best.r === res[0].r || best.r === res[res.length-1].r;
@@ -485,13 +522,13 @@ function bindGearCard(){
     store[current].front = f === "" ? null : +f; store[current].rear = r === "" ? null : +r;
     const ok = await save(current); renderList(); renderDetail(); $("#gMsg").textContent = ok ? "Opgeslagen" : "Opslaan mislukt";
   };
-  $("#gLimit").onchange = e => { setPref("limit", +e.target.value); renderDetail(); };
-  $("#gBandLo").onchange = e => { setPref("bandlo", +e.target.value); renderDetail(); };
-  $("#gBandHi").onchange = e => { setPref("bandhi", +e.target.value); renderDetail(); };
+  $("#gLimit").onchange = e => { setTgt("limit", +e.target.value); renderDetail(); };
+  $("#gBandLo").onchange = e => { setTgt("bandlo", +e.target.value); renderDetail(); };
+  $("#gBandHi").onchange = e => { setTgt("bandhi", +e.target.value); renderDetail(); };
 }
 function lapSection(L){
   const hasSectors = L.table.some(r => r.s.length > 1);
-  const sm = store[current].summary, hasW = !!(sm.waterByLap && sm.waterByLap.some(x=>x)), limit = getPref("limit", 14800), wLo = getPref("wlo", 50), wHi = getPref("whi", 55);
+  const sm = store[current].summary, hasW = !!(sm.waterByLap && sm.waterByLap.some(x=>x)), limit = tgt("limit", 14800), wLo = tgt("wlo", 50), wHi = tgt("whi", 55);
   const nOut = (L.outliers||[]).length;
   const nS = hasSectors ? Math.max(...L.table.map(r=>r.s.length)) : 0;
   const bestS = [...Array(nS)].map((_,i) => Math.min(...L.table.map(r=>r.s[i]||1e9)));
@@ -546,7 +583,7 @@ function drawTrend(){
       scales:{x:{ticks:{color:muted}, grid:{color:line}}, y:{title:{display:true, text:title, color:color}, ticks:{color:muted, callback:v => fmt(v)}, grid:{color:line}}}}});
   trendCharts.push(mk($("#trend"), L.table.map(r => r.time/1000), "seconden", v => Number(v).toFixed(2).replace(".",",") + " s", red));
   trendCharts.push(mk($("#trendV"), L.table.map(r => r.maxV), "km/u", v => Number(v).toFixed(1).replace(".",",") + " km/u", blue));
-  if(sm.waterByLap && sm.waterByLap.some(x => x)){ $("#trendWbox").hidden = false; const lo = getPref("wlo",50), hi = getPref("whi",55);
+  if(sm.waterByLap && sm.waterByLap.some(x => x)){ $("#trendWbox").hidden = false; const lo = tgt("wlo", 50), hi = tgt("whi", 55);
     const ch = mk($("#trendW"), sm.waterByLap, "°C", v => Math.round(v) + " °C", good);
     ch.data.datasets[0].pointBackgroundColor = sm.waterByLap.map(w => w==null ? good : (w<lo||w>hi) ? red : good); ch.data.datasets[0].pointRadius = 4; ch.update(); trendCharts.push(ch); }
 }
@@ -583,10 +620,26 @@ function prepLaps(L, lat0, lon0){
     const x = rows.map(r => (r.lon-lon0)*111320*cosl), y = rows.map(r => (r.lat-lat0)*111320);
     const raw = rows.map(r => r.v), v = raw.map((_,i) => (i===0||i===raw.length-1) ? raw[i] : (raw[i-1]+raw[i]+raw[i+1])/3);
     const dist = [0]; for(let i=1;i<x.length;i++) dist.push(dist[i-1] + Math.hypot(x[i]-x[i-1], y[i]-y[i-1]));
-    P[n] = {x, y, v, dist, t: rows.map((_,i)=>i*0.1), rpm: rows.map(r => r.rpm)};
+    P[n] = {x, y, v, dist, t: rows.map((_,i)=>i*0.1), rpm: rows.map(r => r.rpm), ...gForces(rows, x, y)};
   }
   return P;
 }
+// G-krachten afgeleid uit GPS-snelheid en rijrichting (gladgestreken; geen sensor nodig)
+function gForces(rows, x, y){
+  const n = rows.length, sm5 = a => a.map((_,i) => { let s=0,c=0; for(let k=-2;k<=2;k++){ const j=i+k; if(j>=0&&j<n){ s+=a[j]; c++; } } return s/c; });
+  const v = sm5(rows.map(r => r.v/3.6)); const raw = rows.map(r => r.v/3.6), vr = raw.map((_,i) => (raw[Math.max(0,i-1)]+raw[i]+raw[Math.min(n-1,i+1)])/3);
+  let hd = rows[0].hd != null ? rows.map(r => r.hd*Math.PI/180) : x.map((_,i) => i ? Math.atan2(x[i]-x[i-1], y[i]-y[i-1]) : 0);
+  for(let i=1;i<n;i++){ while(hd[i]-hd[i-1] > Math.PI) hd[i] -= 2*Math.PI; while(hd[i]-hd[i-1] < -Math.PI) hd[i] += 2*Math.PI; }
+  hd = sm5(hd);
+  const lonG = [], latG = [];
+  for(let i=0;i<n;i++){
+    if(i<2 || i>n-3){ lonG.push(0); latG.push(0); continue; }
+    lonG.push(Math.max(-3, Math.min(3, (vr[i+1]-vr[i-1])/0.2/9.81)));
+    latG.push(Math.max(-3, Math.min(3, (hd[i+2]-hd[i-2])/0.4*v[i]/9.81)));
+  }
+  return {lonG, latG};
+}
+const pct = (a, q) => { if(!a.length) return null; const s=[...a].sort((x,y)=>x-y); return s[Math.min(s.length-1, Math.floor(q*(s.length-1)))]; };
 function findCorners(ref){
   const v = ref.v, n = v.length; let mins = [];
   for(let i=2;i<n-2;i++){
@@ -671,7 +724,18 @@ function measure(p, proj, corners){
       let slip = null;
       if(norm){ const ex = idx.filter(i => rd[i] >= rd[im]-5 && rd[i] <= rd[im]+30 && p.v[i] > 20).map(i => p.rpm[i]/p.v[i]).sort((a,b)=>a-b);
         if(ex.length >= 3) slip = ex[ex.length>>1]/norm - 1; }
-      return {slip, rpmMin, brake: rd[ib], vin: p.v[ib], vmin: p.v[im], apex: rd[im], vex: interp(c.e, mono, p.v),
+      let brakeG = null, latGpk = null, gap = null;
+      if(p.lonG){
+        const bz = idx.filter(i => i >= ib && i <= im);
+        brakeG = pct(bz.map(i => -p.lonG[i]), 0.97);
+        const az = idx.filter(i => Math.abs(rd[i]-rd[im]) < 20); latGpk = pct(az.map(i => Math.abs(p.latG[i])), 0.9);
+        if(brakeG > 0.3 && latGpk > 0.5){
+          let bEnd = ib; bz.forEach(i => { if(-p.lonG[i] > 0.3) bEnd = i; });
+          let tIn = im; for(const i of bz){ if(Math.abs(p.latG[i]) > 0.6*latGpk){ tIn = i; break; } }
+          gap = (tIn - bEnd) * 0.1;
+        }
+      }
+      return {slip, brakeG, latG: latGpk, gap, rpmMin, brake: rd[ib], vin: p.v[ib], vmin: p.v[im], apex: rd[im], vex: interp(c.e, mono, p.v),
               dt: interp(c.e, mono, p.t) - interp(c.s, mono, p.t), relift};
     });
 }
@@ -696,13 +760,17 @@ function feedback(o, b, k, A){
   if(dAp < -8 && dEx <= -1.5) out.push(`Het laagste punt ligt ${Math.round(-dAp)} m eerder, maar hij komt trager uit: waarschijnlijk te vroeg op het gas en daardoor wijd of glijden.`);
   else if(dEx <= -2 && Math.abs(dMin) < 1.5) out.push(`Zelfde minimum, maar ${f1(-dEx)} km/u trager bij het uitkomen. De uitkomst is het probleem: gas te vroeg (glijden, wijd) of een lijn die de kart niet snel recht krijgt.`);
   if(o.relift && !b.relift) out.push(`Na het laagste punt zakt de snelheid nog even terug (dubbele dip). Mogelijke oorzaken: te vroeg gas en moeten corrigeren, een lijn die niet strak genoeg is, of een kart die een achterwiel optilt (chassis te stijf).`);
+  if(o.brakeG != null && b.brakeG != null && b.brakeG - o.brakeG > 0.15 && dB < 3) out.push(`Remt minder hard: ongeveer ${o.brakeG.toFixed(1).replace(".",",")} G tegen ${b.brakeG.toFixed(1).replace(".",",")} G. Korter en harder remmen geeft hier meer tijd op het gas.`);
+  if(o.gap != null && b.gap != null && o.gap > 0.25 && o.gap - b.gap > 0.15) out.push(`Er zit ${o.gap.toFixed(1).replace(".",",")} s tussen loslaten van de rem en insturen: hij rolt even uit. Laat remmen en insturen meer in elkaar overlopen.`);
+  if(o.latG != null && b.latG != null && b.latG - o.latG > 0.2 && dMin <= -1) out.push(`Minder bochtkracht: ${o.latG.toFixed(1).replace(".",",")} G tegen ${b.latG.toFixed(1).replace(".",",")} G. Hij gebruikt de grip van de banden niet volledig, of de kart glijdt.`);
   if(o.slip != null && b.slip != null && o.slip - b.slip > 0.04) out.push(`Bij het uitkomen ligt het toerental ${Math.round((o.slip-b.slip)*100)}% hoger dan in de vergelijking bij dezelfde snelheid. De motor draait dus op zonder dat de kart even hard versnelt: koppeling slipt meer, of de achterwielen spinnen door.`);
   return out;
 }
 function avgMetrics(A, k){
   const ls = A.inc.map(n => A.res[n]?.[k]).filter(Boolean); const m = f => ls.reduce((s,o)=>s+o[f],0)/ls.length;
   const dts = ls.map(o=>o.dt), mean = dts.reduce((a,b)=>a+b,0)/dts.length, sd = Math.sqrt(dts.reduce((s,x)=>s+(x-mean)**2,0)/dts.length);
-  return {o:{brake:m("brake"), vin:m("vin"), vmin:m("vmin"), apex:m("apex"), vex:m("vex"), dt:mean, relift: ls.filter(o=>o.relift).length/ls.length > 0.3}, sd};
+  const mg = f => { const a = ls.map(o=>o[f]).filter(x=>x!=null); return a.length ? a.reduce((s,x)=>s+x,0)/a.length : null; };
+  return {o:{brake:m("brake"), vin:m("vin"), vmin:m("vmin"), apex:m("apex"), vex:m("vex"), dt:mean, relift: ls.filter(o=>o.relift).length/ls.length > 0.3, brakeG: mg("brakeG"), latG: mg("latG"), gap: mg("gap"), slip: mg("slip")}, sd};
 }
 function consistencyLabel(sd){ return sd < 0.05 ? ["constant","okk"] : sd < 0.10 ? ["redelijk constant","muted"] : ["wisselend","warn"]; }
 function renderTips(){
@@ -720,7 +788,7 @@ function renderTips(){
 function renderMotor(){
   const box = $("#motor"), L = loaded[current]; if(!box || !L) return;
   const s = store[current], sm = s.summary, A = analyzeCorners(L);
-  const limit = getPref("limit", 14800), wLo = getPref("wlo", 50), wHi = getPref("whi", 55);
+  const limit = tgt("limit", 14800), wLo = tgt("wlo", 50), wHi = tgt("whi", 55);
   const inc = incLaps(L), fast = [...L.table].filter(r => inc.includes(r.lap)).sort((a,b)=>a.time-b.time).slice(0,5);
   const lm = fast.map(r => limitMeters(L.laps[r.lap], limit)).sort((a,b)=>a-b); const lmMed = lm.length ? lm[lm.length>>1] : 0;
   const items = [];
@@ -737,8 +805,41 @@ function renderMotor(){
   box.innerHTML = `<div class="gearcard"><h3 style="margin-top:0">Motor en koppeling ${info("motor")}</h3><ul class="motor">${items.join("")}</ul>
     <div class="row"><label>Doel watertemp van (°C) ${info("doelwater")}<input id="wLo" type="number" value="${wLo}"></label><label>tot (°C)<input id="wHi" type="number" value="${wHi}"></label></div>
     <p class="hint">Een gangbaar doel voor een Rotax Max is 50 tot 55 °C. Pas het aan naar wat jouw motorbouwer adviseert.</p></div>`;
-  $("#wLo").onchange = e => { setPref("wlo", +e.target.value); renderDetail(); };
-  $("#wHi").onchange = e => { setPref("whi", +e.target.value); renderDetail(); };
+  $("#wLo").onchange = e => { setTgt("wlo", +e.target.value); renderDetail(); };
+  $("#wHi").onchange = e => { setTgt("whi", +e.target.value); renderDetail(); };
+}
+let ggChart = null;
+function drawGG(A, n, cmp){
+  const cv = $("#ggChart"); if(!cv || typeof Chart === "undefined") return;
+  const css = getComputedStyle(document.documentElement), red = css.getPropertyValue("--kerb").trim(), blue = css.getPropertyValue("--blue").trim(), muted = css.getPropertyValue("--muted").trim(), line = css.getPropertyValue("--line").trim();
+  const pts = p => p ? p.latG.map((g,i) => ({x: g, y: p.lonG[i]})).filter((_,i) => i>2 && i<p.latG.length-3) : [];
+  const ds = [{label:`Ronde ${n}`, data: pts(A.P[n]), backgroundColor: red, pointRadius: 2}];
+  if(cmp && !cmp.startsWith("x|") && cmp !== "best" && A.P[+cmp]) ds.push({label:`Ronde ${cmp}`, data: pts(A.P[+cmp]), backgroundColor: blue, pointRadius: 2});
+  if(ggChart) ggChart.destroy();
+  ggChart = new Chart(cv, {type:"scatter", data:{datasets: ds}, options:{responsive:true, maintainAspectRatio:false, animation:false,
+    scales:{x:{min:-2.5, max:2.5, title:{display:true, text:"Bocht (G) ← links · rechts →", color:muted}, ticks:{color:muted}, grid:{color:line}},
+            y:{min:-2, max:1, title:{display:true, text:"Remmen (−) · optrekken (+) G", color:muted}, ticks:{color:muted}, grid:{color:line}}},
+    plugins:{legend:{labels:{color:muted, boxWidth:10}}, tooltip:{callbacks:{label:i => `bocht ${i.parsed.x.toFixed(2)} G · lengte ${i.parsed.y.toFixed(2)} G`}}}}});
+}
+function renderProgress(A){
+  const box = $("#progress"); if(!box) return;
+  const others = otherSessions(A); if(!others.length){ box.innerHTML = ""; return; }
+  const rows = [{id: current, lap: A.bestLap, m: A.res[A.bestLap]}].concat(others.map(id => { const L2 = loaded[id]; const b = L2.table.reduce((a,c) => c.time < a.time ? c : a).lap; return {id, lap: b, m: otherMetrics(A, id, b)}; })).filter(r => r.m);
+  const key = r => { const [d,mo,y] = (store[r.id]?.summary?.date||"0-0-0").split("-"); return y+mo+d+(store[r.id]?.summary?.time||""); };
+  rows.sort((a,b) => key(a).localeCompare(key(b)));
+  const bestPer = A.corners.map((_,k) => Math.min(...rows.map(r => r.m[k]?.dt ?? 1e9)));
+  box.innerHTML = `<h3>Voortgang per bocht ${info("voortgang")}</h3><div class="tablewrap"><table><thead><tr><th>Sessie</th><th>Snelste</th>${A.corners.map((_,k)=>`<th>B${k+1}</th>`).join("")}</tr></thead><tbody>${rows.map(r => { const s2 = store[r.id] || {}, sm2 = s2.summary || {};
+    return `<tr${r.id===current?' class="best"':""}><td>${esc(sm2.date)} ${esc(s2.driver||sm2.driver||"")}${s2.front&&s2.rear?` (${s2.front}-${s2.rear})`:""}</td><td>${fmtT(sm2.best)}</td>${A.corners.map((_,k) => { const o = r.m[k]; if(!o) return "<td>–</td>"; const d = o.dt - bestPer[k];
+      return `<td title="minimum ${o.vmin.toFixed(1)} km/u" class="${d < 0.005 ? "bs" : ""}">${o.dt.toFixed(2).replace(".",",")}${d >= 0.005 ? `<span class="muted"> +${d.toFixed(2).replace(".",",")}</span>` : ""}</td>`; }).join("")}</tr>`; }).join("")}</tbody></table></div>
+    <p class="hint">Tijd per bocht in de snelste ronde van elke geladen sessie op deze baan, gemeten op de bochten van deze sessie. Groen is de snelste.</p>`;
+}
+function exportCSV(A){
+  const L = loaded[current], sm = store[current].summary;
+  const head = ["sessie","coureur","ronde","rondetijd","uitschieter","bocht","tijd_bocht_s","rempunt_m","snelheid_rempunt","remkracht_G","minimum_kmh","bochtkracht_G","uitkomst_kmh","laagste_toeren","slip_pct"];
+  const lines = [head.join(";")];
+  L.table.forEach(r => (A.res[r.lap]||[]).forEach((o,k) => { if(!o) return; lines.push([sm.date+" "+sm.time, store[current].driver||sm.driver||"", r.lap, (r.time/1000).toFixed(3), (L.outliers||[]).includes(r.lap)?"ja":"nee", k+1, o.dt.toFixed(3), Math.round(o.brake), o.vin.toFixed(1), o.brakeG!=null?o.brakeG.toFixed(2):"", o.vmin.toFixed(1), o.latG!=null?o.latG.toFixed(2):"", o.vex.toFixed(1), o.rpmMin??"", o.slip!=null?(o.slip*100).toFixed(1):""].join(";").replace(/\./g, ",")); }));
+  const blob = new Blob(["\ufeff" + lines.join("\n")], {type:"text/csv"}); const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+  a.download = `bochtanalyse-${(sm.track||"baan").replace(/[^A-Za-z0-9]+/g,"-")}-${sm.date}.csv`; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 function renderCorners(){
   const box = $("#corners"), L = loaded[current]; if(!box || !L) return;
@@ -761,6 +862,11 @@ function renderCorners(){
     ${A.gps ? (A.gps.ok ? `<p class="hint">GPS-signaal goed: rondelengte ${Math.round(A.gps.lapLen)} m, varieert maar ${Math.round(A.gps.spreadM)} m tussen de rondes.</p>` : `<p class="err">Het GPS-signaal was in deze sessie minder goed (rondelengte varieert ${Math.round(A.gps.spreadM)} m, ${A.gps.jumpsPerLap.toFixed(1).replace(".",",")} sprongen per ronde). Rempunten en de bochtanalyse zijn daardoor minder betrouwbaar.</p>`) : ""}
     <div class="row"><label>Kaart kleuren op ${info("kaart")}<select id="mapMode"><option value="loss">Tijdverlies per bocht</option><option value="speed">Snelheid (gekozen ronde)</option></select></label></div>
     <div class="cwrap"><div class="map">${trackSVG(A)}</div><div class="fb" id="fb"></div></div>
+    <h3>G-krachten ${info("gg")}</h3>
+    <div class="chartbox" style="height:320px;max-width:420px"><canvas id="ggChart" aria-label="G-G-diagram"></canvas></div>
+    <p class="hint">Afgeleid uit GPS-snelheid en rijrichting, dus zonder extra sensor. Zie het als indicatie: kleine pieken zijn ruis.</p>
+    <div id="progress"></div>
+    <p><button class="linkbtn" id="csvBtn" type="button">Bochtanalyse exporteren (CSV)</button> ${info("csv")}</p>
     <p class="hint">Rempunt, minimum en uitkomst komen uit de GPS-snelheid; de Alfano meet geen gas of rem. Verschillen kleiner dan ongeveer 5 meter of 1 km/u vallen binnen de meetonnauwkeurigheid.</p>`;
   const cl = $("#cLap"), cc = $("#cCmp");
   cl.value = prevLap || A.bestLap; cc.value = prevCmp || "best";
@@ -779,13 +885,15 @@ function renderCorners(){
       const lossTxt = bn===n ? "referentie" : (loss>=0 ? "+" : "−") + Math.abs(loss).toFixed(2).replace(".",",") + " s";
       const [cl, ccl] = consistencyLabel(avgMetrics(A, k).sd);
       return `<div class="fbitem ${cls}"><div class="h"><span>Bocht ${k+1} <span class="${ccl}" style="font-family:Barlow,sans-serif">· ${cl}</span></span><span class="num">${lossTxt}</span></div>
-        <div class="hint" style="margin:0">${o.vin-o.vmin<3 ? "Geen remmen (hooguit gas los)" : `Rempunt ${Math.round(o.brake)} m (${f1(o.vin)} km/u)`} · minimum ${f1(o.vmin)} km/u · uitkomst ${f1(o.vex)} km/u${bn!==n?` <br>vergelijking ${label}: ${b.vin-b.vmin<3 ? "geen remmen" : `${Math.round(b.brake)} m (${f1(b.vin)} km/u)`} · ${f1(b.vmin)} · ${f1(b.vex)}`:""}</div>
+        <div class="hint" style="margin:0">${o.vin-o.vmin<3 ? "Geen remmen (hooguit gas los)" : `Rempunt ${Math.round(o.brake)} m (${f1(o.vin)} km/u${o.brakeG ? `, ${o.brakeG.toFixed(1).replace(".",",")} G` : ""})`}${o.latG ? ` · bocht ${o.latG.toFixed(1).replace(".",",")} G` : ""} · minimum ${f1(o.vmin)} km/u · uitkomst ${f1(o.vex)} km/u${bn!==n?` <br>vergelijking ${label}: ${b.vin-b.vmin<3 ? "geen remmen" : `${Math.round(b.brake)} m (${f1(b.vin)} km/u)`} · ${f1(b.vmin)} · ${f1(b.vex)}`:""}</div>
         ${msgs.length ? `<ul>${msgs.map(m=>`<li>${m}</li>`).join("")}</ul>` : (bn!==n && loss < 0.03 ? `<ul><li>${loss <= -0.03 ? "Sneller dan de vergelijking. Kijk wat hij hier anders deed." : "Goed, gelijk aan de vergelijking."}</li></ul>` : "")}</div>`;
     }).join("");
     $(".map").innerHTML = $("#mapMode").value === "speed" ? speedSVG(A, n) : trackSVG(A, colors);
+    drawGG(A, n, cc.value);
   };
   const mm = $("#mapMode"); mm.value = prevMap || "loss";
   cl.onchange = draw; cc.onchange = draw; mm.onchange = draw; draw();
+  renderProgress(A); $("#csvBtn").onclick = () => exportCSV(A);
 }
 function speedSVG(A, lap){
   const p = A.P[lap] || A.ref, xs = A.ref.x, ys = A.ref.y, pad = 14;
@@ -829,6 +937,11 @@ const INFO = {
  bochtanalyse: "Het logboek zoekt zelf de bochten en meet per ronde het rempunt, de minimumsnelheid, de uitkomstsnelheid en de tijd per bocht. Rood betekent tijd verloren ten opzichte van de vergelijking, groen gelijk of sneller. Rem en gas meet de Alfano niet; die worden afgeleid uit de snelheid.",
  vergelijk: "Waarmee je de gekozen ronde vergelijkt: de beste versie van elke bocht uit deze sessie, een andere ronde, of een ronde uit een andere sessie (of van een andere coureur) op dezelfde baan.",
  kaart: "Tijdverlies per bocht: elke bocht kleurt van groen (sneller) tot rood (veel trager) ten opzichte van de vergelijking. Snelheid: de gekozen ronde kleurt van rood (langzaam) naar groen (snel).",
+ profielen: "Een kart-profiel bewaart coureur, motor, chassis, seizoen, standaardtandwielen en gewicht. Kies je bij een sessie een profiel, dan gebruikt het logboek de doelwaarden van die motor. Handig als je het logboek met anderen deelt die een andere motor rijden.",
+ profielkeuze: "Kies bij welk kart-profiel deze sessie hoort. De doelwaarden (watertemperatuur, toerentallen, grens) komen dan uit het profiel, en aanpassingen worden in het profiel bewaard.",
+ gg: "Het G-G-diagram zet de bochtkracht (links-rechts) uit tegen remmen (onder) en optrekken (boven). Een volle vorm betekent dat remmen en insturen in elkaar overlopen. Lege plekken tussen de remwolk en de bochtwolk betekenen dat hij even uitrolt. Met een echte sensor meet je bij een kart rond 1 G remmen en 1,5 tot 2 G in de bocht. Waarden uit de GPS liggen door het gladstrijken meestal wat lager, vooral bij het remmen. Vergelijk daarom vooral rondes en sessies met elkaar.",
+ voortgang: "Hoe snel hij elke bocht reed in de snelste ronde van elke geladen sessie op deze baan. Zo zie je over meerdere sessies of hij in een bocht vooruitgaat.",
+ csv: "Download de bochtanalyse van deze sessie als CSV-bestand voor Excel: per ronde en per bocht de tijd, het rempunt, de remkracht, de minimumsnelheid, de bochtkracht, de uitkomst, het laagste toerental en de slip.",
  doelwater: "De temperatuur waar het koelwater tussen moet blijven. Voor een Rotax Max is 50 tot 55 °C gangbaar; pas het aan naar het advies van je motorbouwer."
 };
 function info(k){ return INFO[k] ? `<button type="button" class="ibtn" data-info="${k}" aria-label="Uitleg">i</button>` : ""; }
@@ -868,7 +981,7 @@ function unb64(str){ const s = atob(str), u = new Uint8Array(s.length); for(let 
 async function exportBackup(){
   const files = {}; for(const [id, rec] of await idbAll()) if(rec && rec.buf && store[id]) files[id] = {name: rec.name, data: b64(rec.buf)};
   const prefs = {}; ["limit","bandlo","bandhi"].forEach(k => prefs[k] = getPref(k, null));
-  const blob = new Blob([JSON.stringify({app:"alfano-logboek", version:1, saved:new Date().toISOString(), store, files, prefs})], {type:"application/json"});
+  const blob = new Blob([JSON.stringify({app:"alfano-logboek", version:1, saved:new Date().toISOString(), store, files, prefs, profiles})], {type:"application/json"});
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "alfano-logboek-backup-" + new Date().toISOString().slice(0,10) + ".json";
   document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   $("#msg").textContent = "Back-up opgeslagen met " + Object.keys(store).length + " sessie(s).";
@@ -879,6 +992,7 @@ async function importBackup(file){
     for(const id in data.store){ store[id] = {...(store[id]||{}), ...data.store[id]}; await save(id); }
     for(const id in (data.files||{})){ const f = data.files[id]; await idbPut(id, {name: f.name, buf: unb64(f.data)}); }
     for(const k in (data.prefs||{})) if(data.prefs[k] != null) setPref(k, data.prefs[k]);
+    if(data.profiles){ profiles = {...profiles, ...data.profiles}; await saveProfiles(); renderProfiles(); }
     await restoreFiles(); renderList(); renderDetail();
     $("#msg").textContent = "Back-up teruggezet: " + Object.keys(data.store).length + " sessie(s).";
   } catch(e){ $("#msg").innerHTML = '<span class="err">' + esc(e.message || "Terugzetten mislukt") + "</span>"; }
@@ -902,6 +1016,37 @@ document.getElementById("bkLoad").onchange = e => { if(e.target.files[0]) import
   }, true);
   document.addEventListener("keydown", e => { if(e.key === "Escape"){ pop.hidden = true; openBtn = null; } });
 })();
+function renderProfiles(){
+  const box = document.getElementById("profiles"); if(!box) return;
+  const ids = Object.keys(profiles);
+  const engOpts = sel => Object.entries(ENGINES).map(([k,e]) => `<option value="${k}"${k===sel?" selected":""}>${esc(e.name)}</option>`).join("");
+  box.innerHTML = `<h2 style="margin-top:22px">Kart-profielen ${info("profielen")}</h2>
+    ${ids.length ? ids.map(id => { const p = profiles[id]; return `<div class="prof"><div><b>${esc(p.name)}</b><div class="m">${esc(p.driver||"")} · ${esc((ENGINES[p.engine]||ENGINES.other).name)}${p.front&&p.rear?` · ${p.front}-${p.rear}`:""}</div></div><div><button class="linkbtn" data-pedit="${id}" type="button">Wijzig</button> <button class="linkbtn" data-pdel="${id}" type="button">×</button></div></div>`; }).join("") : `<p class="hint">Nog geen profielen. Een profiel bewaart coureur, motor, chassis en standaardtandwielen, zodat je die per sessie in één keer kiest.</p>`}
+    <details id="pform"><summary class="linkbtn" style="display:inline-block;margin-top:6px">Nieuw profiel</summary>
+      <form id="pf" class="notes" style="margin-top:8px">
+        <input type="hidden" name="id">
+        <label class="wide">Naam profiel<input name="name" required placeholder="bijv. Jermaine – Senior"></label>
+        <label>Coureur<input name="driver"></label>
+        <label>Motor<select name="engine">${engOpts("rotax_sr")}</select></label>
+        <label>Chassis<input name="chassis" placeholder="bijv. Tony Kart OTK"></label>
+        <label>Seizoen<select name="season"><option value="zomer">Zomer</option><option value="winter">Winter</option></select></label>
+        <label>Voortandwiel<input name="front" type="number"></label>
+        <label>Achtertandwiel<input name="rear" type="number"></label>
+        <label>Gewicht met coureur (kg)<input name="mass" type="number" placeholder="165"></label>
+        <div class="wide"><button class="primary" type="submit">Profiel opslaan</button></div>
+        <p class="hint wide">Bij het opslaan worden de doelwaarden (watertemperatuur, toerentallen) ingevuld met startwaarden voor deze motor. Die kun je daarna bij een sessie aanpassen; ze worden dan in het profiel bewaard.</p>
+      </form></details>`;
+  const f = document.getElementById("pf");
+  f.onsubmit = async ev => { ev.preventDefault(); const d = Object.fromEntries(new FormData(f));
+    const id = d.id || ("p" + Date.now().toString(36)); const old = profiles[id] || {};
+    const engChanged = old.engine !== d.engine || old.season !== d.season;
+    profiles[id] = {...old, name:d.name, driver:d.driver, engine:d.engine, chassis:d.chassis, season:d.season, front:d.front?+d.front:null, rear:d.rear?+d.rear:null, mass:d.mass?+d.mass:null, ...(engChanged ? engineDefaults(d.engine, d.season) : {})};
+    await saveProfiles(); renderProfiles(); renderDetail(); };
+  box.querySelectorAll("[data-pedit]").forEach(b => b.onclick = () => { const p = profiles[b.dataset.pedit]; const fm = document.getElementById("pf");
+    ["name","driver","engine","chassis","season","front","rear","mass"].forEach(k => { if(fm.elements[k]) fm.elements[k].value = p[k] ?? ""; }); fm.elements.id.value = b.dataset.pedit; document.getElementById("pform").open = true; });
+  box.querySelectorAll("[data-pdel]").forEach(b => b.onclick = async () => { if(!confirm("Dit profiel verwijderen? Sessies houden hun gegevens.")) return; delete profiles[b.dataset.pdel]; await saveProfiles(); renderProfiles(); renderDetail(); });
+}
+renderProfiles();
 // ---------- events ----------
 const drop = $("#drop"), inp = $("#file");
 drop.addEventListener("keydown", e => { if(e.key==="Enter"||e.key===" "){ e.preventDefault(); inp.click(); }});
