@@ -179,7 +179,7 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;
 
 // ---------- profielen ----------
 const ENGINES = {
-  rotax_sr: {name:"Rotax Max Senior", water:{zomer:[50,55], winter:[55,60]}, band:[6000,6500], limit:14800},
+  rotax_sr: {name:"Rotax Max Senior", water:{zomer:[50,55], winter:[55,60]}, band:[6000,6500], limit:14700},
   rotax_jr: {name:"Rotax Max Junior", water:{zomer:[50,55], winter:[55,60]}},
   rotax_mini: {name:"Rotax Mini / Micro Max", water:{zomer:[50,55], winter:[55,60]}},
   rotax_dd2: {name:"Rotax DD2 (2 versnellingen)", water:{zomer:[50,55], winter:[55,60]}, gearbox:true},
@@ -412,7 +412,7 @@ function gearCard(s, e, c){
   if(eng && eng.gearbox) return `<div class="gearcard"><h3 style="margin-top:0">Overbrenging ${info("overbrenging")}</h3><p class="hint">Deze sessie hoort bij een motor met versnellingsbak (${esc(eng.name)}). Het tandwieladvies werkt alleen voor motoren zonder schakelbak, omdat het toerental bij schakelen per versnelling anders is. De toerentallen per bocht en de bochtanalyse werken wel gewoon.</p></div>`;
   const sm = s.summary, known = s.front && s.rear;
   const front = s.front || (e ? e.front : 12), rear = s.rear || (e ? Math.round(e.rear) : null);
-  const bandLo = tgt("bandlo", 6000), bandHi = tgt("bandhi", 6500), limit = tgt("limit", 14800);
+  const bandLo = tgt("bandlo", 6000), bandHi = tgt("bandhi", 6500), limit = tgt("limit", 14700);
   const top = sm.topRpm || sm.maxRpm, low = sm.lowRpm;
   const fmt = x => Math.round(x).toLocaleString("nl-NL");
   let advice = "", table = "", cornerTxt = "";
@@ -467,8 +467,9 @@ function gearCard(s, e, c){
     ${histTxt}
   </div>`;
 }
-// Typische vorm van de vermogenscurve van een Rotax Senior (relatief, 1 = piek). Aanname, geen meting.
-const P_SHAPE = [[5000,.25],[6000,.35],[7000,.45],[8000,.58],[9000,.72],[10000,.85],[11000,.95],[11750,1],[12500,.98],[13000,.94],[13500,.88],[14000,.80],[14500,.70],[15000,.58],[15500,.45]];
+// Vorm van de vermogenscurve (relatief, 1 = piek). Rotax Senior Max Evo volgens het Rotax-datasheet:
+// max. vermogen 22 kW bij 11.500 tpm, max. koppel 21 Nm bij 9.000 tpm; de punten daartussen en daarbuiten zijn een gladde aanname.
+const P_SHAPE = [[5000,.29],[6000,.43],[7000,.60],[8000,.76],[9000,.90],[10000,.96],[11000,.99],[11500,1],[12000,.99],[12500,.97],[13000,.93],[13500,.87],[14000,.80],[14500,.72],[15000,.62],[15500,.52]];
 const tShape = rpm => interp(rpm, P_SHAPE.map(x=>x[0]), P_SHAPE.map(x=>x[1])) / Math.max(rpm, 5000) * 10000;
 function simGear(L, A, sm, rear, opts, limit){
   const m = (curProfile()?.mass) || 165, Rr = 0.025*m*9.81, dt = 0.01;
@@ -513,7 +514,7 @@ function simTable(s, front, rear, limit){
   const edge = best.r === res[0].r || best.r === res[res.length-1].r;
   return `<h3>Rondetijdsimulatie ${info("simulatie")}</h3><div class="tablewrap"><table class="gear"><thead><tr><th>Overbrenging</th><th>Verhouding</th><th>Verschil rondetijd</th><th>Topsnelheid (sim.)</th></tr></thead><tbody>${res.map(o => `<tr class="${o.r===best.r?"pick":""}"><td>${front}-${o.r}</td><td>${(o.r/front).toFixed(3).replace(".",",")}</td><td>${o.r===rear ? "gereden" : (o.dlap>=0?"+":"−")+Math.abs(o.dlap).toFixed(2).replace(".",",")+" s"}</td><td>${o.vtop.toFixed(1).replace(".",",")}</td></tr>`).join("")}</tbody></table></div>
   ${edge ? `<p class="hint"><b>Het snelste ligt aan de rand van de tabel.</b> De simulatie wijst die kant op, maar hoe verder van wat je reed, hoe onzekerder de uitkomst. Ga stap voor stap en controleer met de data van de volgende sessie.</p>` : ""}
-  <p class="hint">Rekent per overbrenging uit hoe snel hij optrekt uit elke bocht. Bochtsnelheden en rempunten blijven gelijk. Het logboek gebruikt de typische vorm van een Rotax-vermogenscurve en past de sterkte daarvan en de luchtweerstand aan op het optrekken in deze sessie (gewicht 165 kg met coureur); boven je grens van ${Math.round(limit).toLocaleString("nl-NL")} toeren rekent hij met de begrenzer. Vooral onder 8.000 toeren is de curvevorm een aanname, dus zie dit als richting, niet als exacte tijd. Het advies hierboven (laagste toeren in de bochten) blijft leidend; gebruik de simulatie als tweede mening.</p>`;
+  <p class="hint">Rekent per overbrenging uit hoe snel hij optrekt uit elke bocht. Bochtsnelheden en rempunten blijven gelijk. Het logboek gebruikt de vermogenscurve van de Rotax Senior Max Evo (piekvermogen bij 11.500 tpm, maximaal koppel bij 9.000 tpm, volgens het Rotax-datasheet) en past de sterkte daarvan en de luchtweerstand aan op het optrekken in deze sessie (gewicht 165 kg met coureur); boven je grens van ${Math.round(limit).toLocaleString("nl-NL")} toeren rekent hij met de begrenzer. Alleen de piekpunten komen uit het datasheet; de rest van de curve is een gladde aanname, dus zie dit als richting, niet als exacte tijd. Het advies hierboven (laagste toeren in de bochten) blijft leidend; gebruik de simulatie als tweede mening.</p>`;
 }
 function bindGearCard(){
   const sv = $("#gSave"); if(!sv) return;
@@ -528,7 +529,7 @@ function bindGearCard(){
 }
 function lapSection(L){
   const hasSectors = L.table.some(r => r.s.length > 1);
-  const sm = store[current].summary, hasW = !!(sm.waterByLap && sm.waterByLap.some(x=>x)), limit = tgt("limit", 14800), wLo = tgt("wlo", 50), wHi = tgt("whi", 55);
+  const sm = store[current].summary, hasW = !!(sm.waterByLap && sm.waterByLap.some(x=>x)), limit = tgt("limit", 14700), wLo = tgt("wlo", 50), wHi = tgt("whi", 55);
   const nOut = (L.outliers||[]).length;
   const nS = hasSectors ? Math.max(...L.table.map(r=>r.s.length)) : 0;
   const bestS = [...Array(nS)].map((_,i) => Math.min(...L.table.map(r=>r.s[i]||1e9)));
@@ -785,10 +786,16 @@ function renderTips(){
     return `<li><b>Bocht ${r.k+1}</b> <span class="num">(${r.loss.toFixed(2).replace(".",",")} s per ronde te winnen)</span>: ${msg} <span class="${cc}">Rijdt deze bocht ${cl}.</span></li>`;
   }).join("")}</ol><p class="hint" style="margin:0">Gemiddeld over alle rondes, vergeleken met zijn beste versie van elke bocht in deze sessie.</p></div>`;
 }
+function misfireCount(rows){
+  let ev = 0; if(!rows) return 0;
+  for(let i=2;i<rows.length-2;i++){ const r = rows, v = rows.map(x=>x.v);
+    if(r[i].rpm > 3000 && v[i+2] >= v[i-2]-0.5 && r[i].rpm < Math.min(r[i-1].rpm, r[i+1].rpm) - 350 && r[i].rpm < r[i-2].rpm - 350) ev++; }
+  return ev;
+}
 function renderMotor(){
   const box = $("#motor"), L = loaded[current]; if(!box || !L) return;
   const s = store[current], sm = s.summary, A = analyzeCorners(L);
-  const limit = tgt("limit", 14800), wLo = tgt("wlo", 50), wHi = tgt("whi", 55);
+  const limit = tgt("limit", 14700), wLo = tgt("wlo", 50), wHi = tgt("whi", 55);
   const inc = incLaps(L), fast = [...L.table].filter(r => inc.includes(r.lap)).sort((a,b)=>a.time-b.time).slice(0,5);
   const lm = fast.map(r => limitMeters(L.laps[r.lap], limit)).sort((a,b)=>a-b); const lmMed = lm.length ? lm[lm.length>>1] : 0;
   const items = [];
@@ -802,6 +809,11 @@ function renderMotor(){
     const rise = A.corners.map((_,k) => ({k, d: (avg(last,k) ?? 0) - (avg(first,k) ?? 0)})).filter(x => x.d > 0.03);
     items.push(rise.length ? `<li><b>Koppeling:</b> <span class="warn">bij het uitkomen van bocht ${rise.map(x=>x.k+1).join(", ")} loopt het toerental in de tweede helft van de sessie verder op ten opzichte van de snelheid.</span> Dat kan wijzen op een koppeling die warm wordt of slijt.</li>` : `<li><b>Koppeling:</b> <span class="okk">geen toename van slip tijdens de sessie.</span></li>`);
   }
+  const mf = L.table.map(r => ({lap: r.lap, n: misfireCount(L.laps[r.lap])})), mfTot = mf.reduce((s,x)=>s+x.n,0), mfMax = Math.max(0, ...mf.map(x=>x.n));
+  const isRotax = !curProfile() || /^rotax/.test(curProfile().engine || "");
+  items.push(mfTot >= L.table.length || mfMax >= 3
+    ? `<li><b>Overslaan:</b> <span class="warn">${mfTot} keer zakt het toerental kort weg terwijl hij optrekt${mfMax>=3?` (tot ${mfMax} keer in één ronde)`:""}. Dat kan op overslaan (misfire) wijzen.</span> ${isRotax ? "Rotax adviseert dan: accu volladen (na elke race), bougie en bougiedop schoon, elektrodeafstand onder 1 mm (Junior/Max/DD2) of 1,2 mm (Mini/Micro), bij kou of regen een nieuwe bougie, en de motor op de grid pas laat starten zonder gas te geven." : "Controleer accu, bougie en bougiedop."}</li>`
+    : `<li><b>Overslaan:</b> <span class="okk">geen tekenen van overslaan</span>${mfTot ? ` (${mfTot} losse dipje${mfTot>1?"s":""}, bijvoorbeeld over een kerb, is normaal)` : ""}.</li>`);
   box.innerHTML = `<div class="gearcard"><h3 style="margin-top:0">Motor en koppeling ${info("motor")}</h3><ul class="motor">${items.join("")}</ul>
     <div class="row"><label>Doel watertemp van (°C) ${info("doelwater")}<input id="wLo" type="number" value="${wLo}"></label><label>tot (°C)<input id="wHi" type="number" value="${wHi}"></label></div>
     <p class="hint">Een gangbaar doel voor een Rotax Max is 50 tot 55 °C. Pas het aan naar wat jouw motorbouwer adviseert.</p></div>`;
@@ -916,7 +928,7 @@ const INFO = {
  s_water: "De watertemperatuur uit de sensor (kanaal T1), of wat je zelf hebt ingevuld. Je ziet ook of hij binnen je doel zat.",
  conclusie: "Schrijf hier in één zin wat je veranderde, wat de data liet zien en wat je volgende stap is. Na een seizoen heb je zo een echt logboek; de zin komt terug in de sessielijst en bij 'Eerder op deze baan'.",
  tips: "De drie bochten waar gemiddeld de meeste tijd te winnen is, vergeleken met de beste versie van die bocht in deze sessie. Per bocht staat wat er waarschijnlijk misgaat en of hij die bocht constant of wisselend rijdt. Uitschieters tellen niet mee.",
- motor: "Een snelle check voor de monteur: hoeveel meter per ronde de motor op je grens draait, of de watertemperatuur binnen je doel bleef, en of de koppeling tijdens de sessie meer gaat slippen.",
+ motor: "Een snelle check voor de monteur: hoeveel meter per ronde de motor op je grens draait, of de watertemperatuur binnen je doel bleef, of de koppeling tijdens de sessie meer gaat slippen, en of het toerental tijdens het optrekken kort wegvalt (mogelijk overslaan).",
  overbrenging: "Vul in met welke tandwielen je reed. Het logboek kijkt naar het laagste toerental in de bochten van de 5 snelste rondes en adviseert of je een tand meer of minder achter moet nemen om binnen je doel te komen.",
  geredenmet: "Vul hier het voor- en achtertandwiel in waarmee echt gereden is en klik op Opslaan. Zolang je niets invult, rekent het logboek met een schatting uit de data.",
  doellaag: "Het laagste toerental dat je in de langzaamste bocht wilt houden. Zakt hij eronder, dan adviseert het logboek meer tanden achter; zit hij erboven, dan kan het met minder tanden.",
