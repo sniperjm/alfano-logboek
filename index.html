@@ -142,6 +142,20 @@ th .ibtn{width:16px;height:16px;font-size:10px}
 .prof .m{color:var(--muted);font-size:.86rem}
 details#pform summary{list-style:none}
 details#pform summary::-webkit-details-marker{display:none}
+.tabs{display:flex;gap:4px;border-bottom:2px solid var(--line);margin:4px 0 14px;overflow-x:auto}
+.tab{font:600 1.1rem "Barlow Condensed",sans-serif;background:none;border:0;border-bottom:3px solid transparent;margin-bottom:-2px;padding:8px 14px;color:var(--muted);cursor:pointer;white-space:nowrap}
+.tab.active{color:var(--ink);border-bottom-color:var(--kerb)}
+.tipgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:4px 0 14px}
+@media (max-width:760px){.tipgrid{grid-template-columns:1fr}}
+.tipgrid .tipsbox{margin:0}
+.goodbox{background:color-mix(in srgb,var(--good) 8%,var(--panel));border:1px solid color-mix(in srgb,var(--good) 35%,var(--line));border-radius:10px;padding:14px 16px}
+.goodbox ul{margin:6px 0 0;padding-left:18px}.goodbox li{margin:6px 0}
+.kb{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+.kb article{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--soft)}
+.kb article h3{margin-top:0}
+.kb ul{padding-left:18px;margin:6px 0}.kb li{margin:4px 0}
+.kb .src{font-size:.82rem;color:var(--muted);margin:8px 0 0}
+.kb a{color:var(--blue)}
 </style>
 </head>
 <body>
@@ -179,9 +193,11 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;
 
 // ---------- profielen ----------
 const ENGINES = {
-  rotax_sr: {name:"Rotax Max Senior", water:{zomer:[50,55], winter:[55,60]}, band:[6000,6500], limit:14700},
-  rotax_jr: {name:"Rotax Max Junior", water:{zomer:[50,55], winter:[55,60]}},
-  rotax_mini: {name:"Rotax Mini / Micro Max", water:{zomer:[50,55], winter:[55,60]}},
+  // Watertemperatuur en carburateur voor Rotax volgens Rotax Tech Tip 7 (Plasma-cilinder)
+  rotax_sr: {name:"Rotax Max Senior", water:{zomer:[50,55], winter:[50,55]}, band:[6000,6500], limit:14700, jet:{main:126, range:[124,128], flt:"3,0 mm / drop 15 mm", air:"1,75"}},
+  rotax_jr: {name:"Rotax Max Junior", water:{zomer:[50,55], winter:[50,55]}, jet:{main:125, range:[122,128], flt:"3,0 mm / drop 15 mm", air:"1,75"}},
+  rotax_mini: {name:"Rotax Mini Max", water:{zomer:[55,60], winter:[55,60]}, jet:{main:115, range:[112,118], flt:"3,0 mm / drop 14 mm", air:"1,75"}},
+  rotax_micro: {name:"Rotax Micro Max", water:{zomer:[85,92], winter:[85,92]}, jet:{main:108, range:[105,112], flt:"2,5 mm / drop 13 mm", air:"1,75"}},
   rotax_dd2: {name:"Rotax DD2 (2 versnellingen)", water:{zomer:[50,55], winter:[55,60]}, gearbox:true},
   x30_sr: {name:"IAME X30 Senior", water:{zomer:[48,52], winter:[55,60]}},
   x30_jr: {name:"IAME X30 Junior", water:{zomer:[48,52], winter:[55,60]}, limit:16000},
@@ -199,6 +215,13 @@ async function saveProfiles(){
 const curProfile = () => profiles[store[current]?.profile] || null;
 function tgt(key, def){ const pr = curProfile(); if(pr && pr[key] != null && pr[key] !== "") return +pr[key]; return getPref(key, def); }
 function setTgt(key, v){ const pr = curProfile(); if(pr){ pr[key] = v; saveProfiles(); } else setPref(key, v); }
+function curJet(){ const pr = curProfile(); const e = pr ? ENGINES[pr.engine] : ENGINES.rotax_sr; return e && e.jet ? e.jet : null; }
+function jetHint(s){
+  const j = curJet(); if(!j) return "";
+  const val = s.jet ? parseFloat(String(s.jet).replace(",", ".")) : null;
+  const warn = val && (val < j.range[0] || val > j.range[1]) ? `<span class="warn">Sproeier ${esc(s.jet)} valt buiten het normale bereik (${j.range[0]}–${j.range[1]}).</span> ` : "";
+  return `<p class="hint wide">${warn}Aanbevolen carburateurafstelling voor deze motor: zie het tabblad Kennisbank.</p>`;
+}
 function engineDefaults(engId, season){
   const e = ENGINES[engId] || ENGINES.other, w = e.water[season || "zomer"];
   const out = {wlo: w[0], whi: w[1]}; if(e.band){ out.bandlo = e.band[0]; out.bandhi = e.band[1]; } if(e.limit) out.limit = e.limit; return out;
@@ -358,8 +381,22 @@ function renderDetail(){
       <div class="stat"><small>Watertemperatuur ${info("s_water")}</small><b>${sm.waterMax ? Math.round(sm.waterMax)+" °C" : (s.water ? esc(s.water)+" °C" : "–")}</b><small>${(() => { const lo = tgt("wlo", 50), hi = tgt("whi", 55), w = sm.waterMax || (s.water ? +String(s.water).replace(",",".") : null); if(!w) return "geen sensordata"; const st = w > hi ? '<span class="warn">te warm</span>' : (sm.waterMin && sm.waterMin < lo) || w < lo ? '<span class="warn">te koud</span>' : '<span class="okk">binnen doel</span>'; return (sm.waterMax ? (sm.waterMin ? "min "+Math.round(sm.waterMin)+" · max · " : "max · ") : "handmatig · ") + st; })()}</small></div>
     </div>
     <div class="concl"><label style="flex:0 1 220px">Kart-profiel ${info("profielkeuze")}<select id="profSel"><option value="">Geen profiel</option>${Object.entries(profiles).map(([id,p]) => `<option value="${id}"${s.profile===id?" selected":""}>${esc(p.name)}</option>`).join("")}</select></label><label>Conclusie van deze sessie ${info("conclusie")}<input id="conclIn" value="${esc(s.conclusion)}" placeholder="Wat veranderd · wat zei de data · wat is de volgende stap"></label><button class="primary" id="conclSave" type="button">Opslaan</button><span id="conclMsg" class="saved" role="status"></span></div>
-    <div id="tips"></div>
-    <div id="motor"></div>
+    <div class="tabs" role="tablist">
+      <button type="button" class="tab" data-tab="rijden" role="tab">Rijden</button>
+      <button type="button" class="tab" data-tab="afstelling" role="tab">Afstelling</button>
+      <button type="button" class="tab" data-tab="kennis" role="tab">Kennisbank</button>
+    </div>
+    <section class="pane" data-pane="rijden">
+      <div id="tips"></div>
+      <div id="corners"></div>
+      ${L ? (() => { try { return lapSection(L); } catch(err){ console.error(err); return `<p class="err">De rondes konden niet worden getoond: ${esc(err.message)}</p>`; } })() : `<p class="hint" style="margin-top:18px">De rondedata van deze sessie zijn niet geladen. Sleep het .alf2-bestand opnieuw hierheen om de rondes en de analyse te zien.</p>`}
+      <details><summary>Zo lees je de grafiek</summary>
+        <p><b>Toerentallijn op het rechte stuk.</b> Blijft hij stijgen tot het rempunt, dan heeft de motor nog ruimte. Wordt hij een tijdje vlak vóór het remmen, dan loop je tegen het maximum aan en is de overbrenging te kort.</p>
+        <p><b>Dalen in de lijn</b> zijn de bochten. Hoe lager het dal, hoe trager de bocht. Een hoger dal betekent meer snelheid door de bocht en een snellere uitkomst.</p>
+        <p><b>Twee rondes vergelijken.</b> Kies een tweede ronde: waar de stippellijn eerder of hoger omhoog gaat, was die ronde sneller uit de bocht. Dat is meestal waar de tijd zit.</p>
+      </details>
+    </section>
+    <section class="pane" data-pane="afstelling" hidden>
     ${(() => { try { return gearCard(s, e, c); } catch(err){ console.error(err); return `<p class="err">Het tandwielblok kon niet worden gemaakt: ${esc(err.message)}</p>`; } })()}
     <h3>Notities bij deze sessie ${info("notities")}</h3>
     <form class="notes" id="notes">
@@ -367,22 +404,20 @@ function renderDetail(){
       <label>Banden (set / staat)<input name="tyres" value="${esc(s.tyres)}" placeholder="bijv. set 2, 3e sessie"></label>
       <label>Spanning koud (bar)<input name="pCold" value="${esc(s.pCold)}" placeholder="bijv. 0,60"></label>
       <label>Spanning warm (bar)<input name="pHot" value="${esc(s.pHot)}" placeholder="bijv. 0,72"></label>
-      <label>Sproeier<input name="jet" value="${esc(s.jet)}" placeholder="bijv. 125"></label>
+      <label>Sproeier<input name="jet" value="${esc(s.jet)}" placeholder="${curJet() ? curJet().main : "bijv. 125"}"></label>
       <label>Spoorbreedte voor<input name="trackF" value="${esc(s.trackF)}" placeholder="mm of stand"></label>
       <label>Spoorbreedte achter<input name="trackR" value="${esc(s.trackR)}" placeholder="mm"></label>
       <label>Achteras<input name="axle" value="${esc(s.axle)}" placeholder="bijv. medium"></label>
       <label>Watertemp handmatig (°C)<input name="water" value="${esc(s.water)}" placeholder="als geen sensor"></label>
       <label>Weer / baan<input name="weather" value="${esc(s.weather)}" placeholder="bijv. droog, 18 °C"></label>
       <label class="wide">Overige notities<textarea name="notes" placeholder="Setup, sproeier, gevoel van de coureur…">${esc(s.notes)}</textarea></label>
+      ${jetHint(s)}
       <div class="wide"><button class="primary" type="submit">Notities opslaan</button><span id="savedMsg" class="saved" role="status"></span></div>
     </form>
-    ${L ? (() => { try { return lapSection(L); } catch(err){ console.error(err); return `<p class="err">De rondes konden niet worden getoond: ${esc(err.message)}</p>`; } })() : `<p class="hint" style="margin-top:18px">De rondedata van deze sessie zijn niet geladen. Sleep het .alf2-bestand opnieuw hierheen om de rondes en grafiek te zien.</p>`}
-    <details><summary>Zo lees je de grafiek</summary>
-      <p><b>Toerentallijn op het rechte stuk.</b> Blijft hij stijgen tot het rempunt, dan heeft de motor nog ruimte. Wordt hij een tijdje vlak vóór het remmen, dan loop je tegen het maximum aan en is de overbrenging te kort.</p>
-      <p><b>Dalen in de lijn</b> zijn de bochten. Hoe lager het dal, hoe trager de bocht. Een hoger dal betekent meer snelheid door de bocht en een snellere uitkomst.</p>
-      <p><b>Twee rondes vergelijken.</b> Kies een tweede ronde: waar de stippellijn eerder of hoger omhoog gaat, was die ronde sneller uit de bocht. Dat is meestal waar de tijd zit.</p>
-      <p><b>Toeren per km/u</b> hangt alleen af van tandwielen en bandmaat. Daarom kun je er bij oude sessies de overbrenging mee terugvinden.</p>
-    </details>`;
+    <div id="motor"></div>
+    </section>
+    <section class="pane" data-pane="kennis" hidden>${kennisbank()}</section>`;
+  bindTabs();
   const io = $("#incOut"); if(io) io.onchange = () => { setPref("incout", io.checked ? 1 : 0); renderDetail(); };
   $("#delSess").onclick = () => removeSessions([current], "Deze sessie verwijderen, inclusief je notities en tandwielen?");
   $("#notes").onsubmit = async ev => {
@@ -564,8 +599,7 @@ function lapSection(L){
       <thead><tr><th>Ronde</th><th>Tijd</th>${bestS.map((_,i)=>`<th>S${i+1}</th>`).join("")}<th>Min toeren</th><th>Max toeren</th><th>m op grens ${info("mgrens")}</th><th>Min km/u</th><th>Max km/u</th>${hasW ? "<th>Water °C</th>" : ""}</tr></thead>
       <tbody>${L.table.map((r,ri) => { const isOut = (L.outliers||[]).includes(r.lap); const w = hasW ? sm.waterByLap[ri] : null;
         return `<tr data-lap="${r.lap}" class="${r.time===best?"best":""}${isOut?" outrow":""}"><td>${r.lap}${isOut?' <span class="muted">uitschieter</span>':""}</td><td>${fmtT(r.time)}</td>${bestS.map((b,i)=>`<td class="${r.s[i]===b?"bs":""}">${fmtT(r.s[i])}</td>`).join("")}<td>${r.minRpm}</td><td>${r.maxRpm}</td><td>${limitMeters(L.laps[r.lap], limit)}</td><td>${r.minV.toFixed(1)}</td><td>${r.maxV.toFixed(1)}</td>${hasW ? `<td>${w==null?"–":Math.round(w)}${w!=null && (w<wLo||w>wHi) ? ` <span class="warn">${w<wLo?"koud":"warm"}</span>` : ""}</td>` : ""}</tr>`; }).join("")}</tbody>
-    </table></div>
-    <div id="corners"></div>`
+    </table></div>`
     .replace(`<select id="lapA">`, `<select id="lapA" data-best="${bestLap}">`);
 }
 
@@ -779,18 +813,85 @@ function renderTips(){
   const A = analyzeCorners(L); if(!A || !A.corners.length){ box.innerHTML = ""; return; }
   const rows = A.corners.map((_,k) => { const {o, sd} = avgMetrics(A, k); const b = A.res[A.best[k]][k]; return {k, loss: o.dt - b.dt, o, b, sd}; }).sort((x,y) => y.loss - x.loss).slice(0,3);
   const f1 = x => x.toFixed(1).replace(".",",");
-  box.innerHTML = `<div class="tipsbox"><h3 style="margin-top:0">3 tips voor de volgende sessie ${info("tips")}</h3><ol>${rows.map(r => {
+  const allRows = A.corners.map((_,k) => { const {o, sd} = avgMetrics(A, k); const b = A.res[A.best[k]][k]; return {k, loss: o.dt - b.dt, sd, o}; });
+  const good = [...allRows].sort((x,y) => (x.loss + x.sd) - (y.loss + y.sd)).filter(r => !rows.some(t => t.k === r.k)).slice(0,2);
+  const lapTimes = L.table.filter(r => A.inc.includes(r.lap)).map(r => r.time/1000), mT = lapTimes.reduce((a,b)=>a+b,0)/lapTimes.length, sdT = Math.sqrt(lapTimes.reduce((s,x)=>s+(x-mT)**2,0)/lapTimes.length);
+  const goodItems = good.map(r => `<li><b>Bocht ${r.k+1}:</b> gemiddeld maar ${r.loss.toFixed(2).replace(".",",")} s van zijn beste versie${r.sd < 0.05 ? " en hij rijdt hem elke ronde bijna hetzelfde" : ""}. Zo houden.</li>`);
+  if(sdT < 0.35) goodItems.push(`<li><b>Constant:</b> de rondetijden liggen dicht bij elkaar (spreiding ${sdT.toFixed(2).replace(".",",")} s). Dat is een goede basis om de afstelling te beoordelen.</li>`);
+  const bestBrake = [...allRows].filter(r => r.o.brakeG != null).sort((a,b) => b.o.brakeG - a.o.brakeG)[0];
+  if(bestBrake && goodItems.length < 3) goodItems.push(`<li><b>Remmen:</b> in bocht ${bestBrake.k+1} remt hij het hardst van de sessie. Kijk of hij dat ook in andere bochten kan.</li>`);
+  box.innerHTML = `<div class="tipgrid"><div class="goodbox"><h3 style="margin-top:0">Dit gaat al goed ${info("goed")}</h3><ul>${goodItems.join("")}</ul></div><div class="tipsbox"><h3 style="margin-top:0">3 tips voor de volgende sessie ${info("tips")}</h3><ol>${rows.map(r => {
     let msg = feedback(r.o, r.b, r.k, A)[0];
     if(!msg) msg = r.o.vin < r.b.vin - 1.5 ? `Hij komt gemiddeld ${f1(r.b.vin-r.o.vin)} km/u trager aan: beter uit de bocht ervóór komen.` : `Snelheden zijn gemiddeld gelijk aan zijn beste: let op de lijn, zo strak mogelijk.`;
     const [cl, cc] = consistencyLabel(r.sd);
     return `<li><b>Bocht ${r.k+1}</b> <span class="num">(${r.loss.toFixed(2).replace(".",",")} s per ronde te winnen)</span>: ${msg} <span class="${cc}">Rijdt deze bocht ${cl}.</span></li>`;
-  }).join("")}</ol><p class="hint" style="margin:0">Gemiddeld over alle rondes, vergeleken met zijn beste versie van elke bocht in deze sessie.</p></div>`;
+  }).join("")}</ol><p class="hint" style="margin:0">Gemiddeld over alle rondes, vergeleken met zijn beste versie van elke bocht in deze sessie.</p></div></div>`;
 }
 function misfireCount(rows){
   let ev = 0; if(!rows) return 0;
   for(let i=2;i<rows.length-2;i++){ const r = rows, v = rows.map(x=>x.v);
     if(r[i].rpm > 3000 && v[i+2] >= v[i-2]-0.5 && r[i].rpm < Math.min(r[i-1].rpm, r[i+1].rpm) - 350 && r[i].rpm < r[i-2].rpm - 350) ev++; }
   return ev;
+}
+let activeTab = "rijden";
+function bindTabs(){
+  const show = t => { activeTab = t;
+    document.querySelectorAll(".tab").forEach(b => { const on = b.dataset.tab === t; b.classList.toggle("active", on); b.setAttribute("aria-selected", on); });
+    document.querySelectorAll(".pane").forEach(p => p.hidden = p.dataset.pane !== t);
+    if(t === "rijden") [chart, chartV, ggChart, ...trendCharts].forEach(c => { try { c && c.resize(); } catch(e){} }); };
+  document.querySelectorAll(".tab").forEach(b => b.onclick = () => show(b.dataset.tab));
+  show(activeTab);
+}
+function kennisbank(){
+  const L = (u, t) => `<a href="${u}" target="_blank" rel="noopener">${t}</a>`;
+  const tt7 = [["Micro","108 (105–112)","2,5 / 13","1,75","85–92"],["Mini","115 (112–118)","3,0 / 14","1,75","55–60"],["Junior","125 (122–128)","3,0 / 15","1,75","50–55"],["Senior","126 (124–128)","3,0 / 15","1,75","50–55"]];
+  const pr = curProfile(), eng = pr ? (ENGINES[pr.engine]||{}).name : null;
+  return `<p class="hint">Achtergrondinformatie van Rotax, tuners en coaches. Dit staat los van de analyse, als naslag bij het afstellen.${eng ? ` Gekozen motor in het profiel: <b>${esc(eng)}</b>.` : ""}</p>
+  <div class="kb">
+   <article><h3>Rotax 125 Senior MAX evo: officiële gegevens</h3>
+    <p>Maximaal vermogen 22 kW (30 pk) bij 11.500 tpm, maximaal koppel 21 Nm bij 9.000 tpm. Op het rechte stuk (rond 14.700 tpm) zit de motor dus ruim voorbij zijn piekvermogen; uit een haarspeld (rond 6.000 tpm) ver onder zijn maximale koppel. De rondetijdsimulatie gebruikt deze punten.</p>
+    <p class="src">Bron: ${L("https://www.rotax-racing.com/assets/uploads/Engines/2021_Datasheet_Senior_Printpreview.pdf","Rotax datasheet 125 MAX evo (2021)")}</p></article>
+   <article><h3>Carburateur en bedrijfstemperatuur (Plasma-cilinder)</h3>
+    <div class="tablewrap"><table><thead><tr><th>Categorie</th><th>Hoofdsproeier (bereik)</th><th>Vlotter / drop (mm)</th><th>Luchtschroef (slag)</th><th>Optimaal (°C)</th></tr></thead>
+    <tbody>${tt7.map(r => `<tr>${r.map((c,i) => `<td${i===0?' style="text-align:left"':""}>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+    <p>Aanbevolen startafstelling van Rotax voor de nieuwe Plasma-cilinder met de nieuwe zuiger. Voor de DD2 volgt de afstelling later.</p>
+    <p class="src">Bron: ${L("https://www.rotax-racing.com/assets/uploads/TechTips/Rotax-K-TechTip7_Rotax-Plasma-Cylinder.pdf","Rotax Tech Tip 7")}</p></article>
+   <article><h3>De Plasma-cilinder in het kort</h3>
+    <ul><li>Zelfde vermogen en rondetijd als de vorige cilinder; wel langere levensduur door de plasmacoating.</li>
+    <li>Senior: drie extra onderdelen nodig voor de uitlaatklep (450415, 251337, 250230). Micro, Mini en Junior passen direct.</li>
+    <li>Alleen nog maat A en AB; de letters geven de boringstolerantie aan, geen kwaliteit.</li>
+    <li>2027: optioneel voor Junior en Senior, verplicht voor Micro en Mini vanaf 1 januari 2027. Check het reglement van je eigen kampioenschap.</li></ul>
+    <p class="src">Bron: ${L("https://www.rotax-racing.com/assets/uploads/TechTips/Rotax-K-TechTip7_Rotax-Plasma-Cylinder.pdf","Rotax Tech Tip 7")}</p></article>
+   <article><h3>Overslaan (misfire) voorkomen</h3>
+    <ul><li>Accu volladen, bij voorkeur na elke race, en zeker in de winterstalling; na 2–3 jaar de capaciteit laten testen.</li>
+    <li>Bougie en bougiedop schoon houden; elektrodeafstand onder 1 mm (Junior/Max/DD2) of 1,2 mm (Micro/Mini).</li>
+    <li>Rotax raadt de rode NGK-bougiedop 866707 aan tegen overslaan.</li>
+    <li>Bij kou of regen een nieuwe bougie vóór de race.</li>
+    <li>Op de grid de motor pas laat starten en geen losse gasstoten geven: dat vervuilt de bougie.</li></ul>
+    <p>Het logboek waarschuwt in het tabblad Afstelling als het toerental tijdens het optrekken vaak kort wegvalt.</p>
+    <p class="src">Bron: ${L("https://www.rotax-racing.com/assets/uploads/TechTips/Rotax-K-TechTip1-2303-RZ.pdf","Rotax Tech Tip 1")}, ${L("https://www.rotax-racing.com/assets/uploads/TechTips/Rotax-K-TechTip3-2303-RZ.pdf","Rotax Tech Tip 3")}</p></article>
+   <article><h3>Onderhoud</h3>
+    <ul><li>De XS-carburateur van de evo-motoren is veel minder gevoelig voor weersveranderingen dan de oude QS-carburateur, dus je hoeft minder vaak te verspringen.</li>
+    <li>Revisie-interval voor zuiger en drijfstang: Rotax adviseert de motor uiterlijk na 50 draaiuren uit elkaar te halen en te controleren. Het logboek telt de uren per kart-profiel bij (tabblad Afstelling).</li></ul>
+    <p class="src">Bron: ${L("https://kartpulse.com/article/print/90","Rotax Q&amp;A 125 MAX evo (via KartPulse)")}</p></article>
+   <article><h3>Watertemperatuur bij andere motoren</h3>
+    <p>Voor OK, OK-Junior, KZ, ROK en IAME noemt TKart 48–52 °C in de zomer en 55–60 °C in de winter. Te koud kost ook vermogen, door meer wrijving. Ga altijd uit van het advies van je motorbouwer.</p>
+    <p class="src">Bron: ${L("https://tkart.it/en/magazine/expert-advice/what-is-the-radiator-curtain-used-for-and-how-to-maintain-the-right-water-temperature-kart-125kz-ok-rok-iame-rotax-winter-air-shield-thermostatic-valve-cylinder-cover","TKart, radiator en watertemperatuur")}, ${L("https://purpl.app/blog/kart-water-temperature/","Purpl, kart water temperature")}</p></article>
+   <article><h3>Data lezen: tips van coaches</h3>
+    <ul><li>Begin met het toerental aan het eind van het rechte stuk (overbrenging), dan het snelheidsverloop (chassis), dan de lijn (rijtechniek) en de temperaturen (motor).</li>
+    <li>De minimumsnelheid in de bocht is het belangrijkste getal: een kart heeft geen vering die dat maskeert.</li>
+    <li>Zelfde minimum maar trager op snelheid komen = probleem bij het uitkomen.</li>
+    <li>Snelheid vlak terwijl het toerental omhoog schiet bij het uitkomen = slippende koppeling.</li>
+    <li>Rondes met verkeer of een spin niet meenemen in de analyse.</li>
+    <li>Verander één ding per keer en sluit elke sessie af met één zin: wat veranderd, wat zei de data, wat nu.</li></ul>
+    <p class="src">Bronnen: ${L("https://harrisraceradios.com/pages/kart-setup-using-mychron","Harris Race Radios")}, ${L("https://purpl.app/blog/how-to-analyze-kart-racing-data/","Purpl, data analyseren")}, ${L("https://purpl.app/blog/karting-telemetry-guide/","Purpl, telemetrie")}</p></article>
+   <article><h3>G-krachten: richtwaarden</h3>
+    <p>Met een sensor gemeten: remmen ongeveer 0,8–1,2 G, optrekken 0,3–0,6 G, en in de bocht rond 1,5–2 G bij een kart met verse banden. Het logboek berekent G uit de GPS; door het gladstrijken liggen die waarden lager, vooral bij het remmen. Vergelijk dus vooral rondes met elkaar.</p>
+    <p class="src">Bronnen: ${L("https://harrisraceradios.com/pages/accelerometer-g-force-guide","Harris Race Radios, G-force guide")}, ${L("https://purpl.app/blog/friction-circle-karting/","Purpl, friction circle")}</p></article>
+   <article><h3>Uitlaatgastemperatuur (alleen met EGT-sensor)</h3>
+    <p>Een forumgebruiker vond het meeste vermogen rond 635 °C, met 670 °C en hoger als gebied waar de zuiger kan vastlopen. Dit verschilt sterk per motor en per plek van de sensor; gebruik het alleen als grove indicatie.</p>
+    <p class="src">Bron: ${L("https://forums.kartpulse.com/t/iame-x30-exhaust-temp/12804","KartPulse forum")}</p></article>
+  </div>`;
 }
 function renderMotor(){
   const box = $("#motor"), L = loaded[current]; if(!box || !L) return;
@@ -814,9 +915,15 @@ function renderMotor(){
   items.push(mfTot >= L.table.length || mfMax >= 3
     ? `<li><b>Overslaan:</b> <span class="warn">${mfTot} keer zakt het toerental kort weg terwijl hij optrekt${mfMax>=3?` (tot ${mfMax} keer in één ronde)`:""}. Dat kan op overslaan (misfire) wijzen.</span> ${isRotax ? "Rotax adviseert dan: accu volladen (na elke race), bougie en bougiedop schoon, elektrodeafstand onder 1 mm (Junior/Max/DD2) of 1,2 mm (Mini/Micro), bij kou of regen een nieuwe bougie, en de motor op de grid pas laat starten zonder gas te geven." : "Controleer accu, bougie en bougiedop."}</li>`
     : `<li><b>Overslaan:</b> <span class="okk">geen tekenen van overslaan</span>${mfTot ? ` (${mfTot} losse dipje${mfTot>1?"s":""}, bijvoorbeeld over een kerb, is normaal)` : ""}.</li>`);
+  const prf = curProfile();
+  if(prf){ const rev = prf.revision ? prf.revision.split("-").reverse().join("-") : null; // yyyy-mm-dd -> dd-mm-yyyy
+    const toKey = d => { const [dd,mm,yy] = (d||"0-0-0").split("-"); return yy+mm+dd; };
+    let secs = 0, n = 0; Object.entries(store).forEach(([id, x]) => { if(x.profile !== store[current].profile || !x.summary) return; if(rev && toKey(x.summary.date) < toKey(rev)) return; const t = loaded[id]?.table; if(t){ secs += t.reduce((s,r)=>s+r.time/1000,0); n++; } });
+    const hrs = secs/3600;
+    items.push(`<li><b>Motoruren${prf.revision ? " sinds revisie" : ""}:</b> ${hrs.toFixed(1).replace(".",",")} uur in ${n} sessie(s) in het logboek.${hrs >= 45 ? ' <span class="warn">Rotax adviseert uiterlijk na 50 uur een revisie.</span>' : ""} <span class="muted">Telt alleen gereden rondes van sessies die in het logboek staan.</span></li>`); }
   box.innerHTML = `<div class="gearcard"><h3 style="margin-top:0">Motor en koppeling ${info("motor")}</h3><ul class="motor">${items.join("")}</ul>
     <div class="row"><label>Doel watertemp van (°C) ${info("doelwater")}<input id="wLo" type="number" value="${wLo}"></label><label>tot (°C)<input id="wHi" type="number" value="${wHi}"></label></div>
-    <p class="hint">Een gangbaar doel voor een Rotax Max is 50 tot 55 °C. Pas het aan naar wat jouw motorbouwer adviseert.</p></div>`;
+    <p class="hint">De startwaarde komt uit het gekozen motorprofiel. Waarden per motor en de bronnen staan in het tabblad Kennisbank.</p></div>`;
   $("#wLo").onchange = e => { setTgt("wlo", +e.target.value); renderDetail(); };
   $("#wHi").onchange = e => { setTgt("whi", +e.target.value); renderDetail(); };
 }
@@ -954,7 +1061,8 @@ const INFO = {
  gg: "Het G-G-diagram zet de bochtkracht (links-rechts) uit tegen remmen (onder) en optrekken (boven). Een volle vorm betekent dat remmen en insturen in elkaar overlopen. Lege plekken tussen de remwolk en de bochtwolk betekenen dat hij even uitrolt. Met een echte sensor meet je bij een kart rond 1 G remmen en 1,5 tot 2 G in de bocht. Waarden uit de GPS liggen door het gladstrijken meestal wat lager, vooral bij het remmen. Vergelijk daarom vooral rondes en sessies met elkaar.",
  voortgang: "Hoe snel hij elke bocht reed in de snelste ronde van elke geladen sessie op deze baan. Zo zie je over meerdere sessies of hij in een bocht vooruitgaat.",
  csv: "Download de bochtanalyse van deze sessie als CSV-bestand voor Excel: per ronde en per bocht de tijd, het rempunt, de remkracht, de minimumsnelheid, de bochtkracht, de uitkomst, het laagste toerental en de slip.",
- doelwater: "De temperatuur waar het koelwater tussen moet blijven. Voor een Rotax Max is 50 tot 55 °C gangbaar; pas het aan naar het advies van je motorbouwer."
+ goed: "De bochten waar hij gemiddeld het dichtst bij zijn beste versie zit en die hij constant rijdt, en andere sterke punten uit de sessie. Goed om aan de coureur te laten zien wat hij al goed doet, en om te weten wat je met een setupwijziging niet kapot moet maken.",
+ doelwater: "De temperatuur waar het koelwater tussen moet blijven. Rotax noemt in Tech Tip 7 50–55 °C als optimum voor Junior en Senior. Pas het aan naar het advies van je motorbouwer."
 };
 function info(k){ return INFO[k] ? `<button type="button" class="ibtn" data-info="${k}" aria-label="Uitleg">i</button>` : ""; }
 function lossColor(loss){
@@ -1045,6 +1153,7 @@ function renderProfiles(){
         <label>Voortandwiel<input name="front" type="number"></label>
         <label>Achtertandwiel<input name="rear" type="number"></label>
         <label>Gewicht met coureur (kg)<input name="mass" type="number" placeholder="165"></label>
+        <label>Laatste revisie motor<input name="revision" type="date"></label>
         <div class="wide"><button class="primary" type="submit">Profiel opslaan</button></div>
         <p class="hint wide">Bij het opslaan worden de doelwaarden (watertemperatuur, toerentallen) ingevuld met startwaarden voor deze motor. Die kun je daarna bij een sessie aanpassen; ze worden dan in het profiel bewaard.</p>
       </form></details>`;
@@ -1052,10 +1161,10 @@ function renderProfiles(){
   f.onsubmit = async ev => { ev.preventDefault(); const d = Object.fromEntries(new FormData(f));
     const id = d.id || ("p" + Date.now().toString(36)); const old = profiles[id] || {};
     const engChanged = old.engine !== d.engine || old.season !== d.season;
-    profiles[id] = {...old, name:d.name, driver:d.driver, engine:d.engine, chassis:d.chassis, season:d.season, front:d.front?+d.front:null, rear:d.rear?+d.rear:null, mass:d.mass?+d.mass:null, ...(engChanged ? engineDefaults(d.engine, d.season) : {})};
+    profiles[id] = {...old, name:d.name, driver:d.driver, engine:d.engine, chassis:d.chassis, season:d.season, front:d.front?+d.front:null, rear:d.rear?+d.rear:null, mass:d.mass?+d.mass:null, revision:d.revision||null, ...(engChanged ? engineDefaults(d.engine, d.season) : {})};
     await saveProfiles(); renderProfiles(); renderDetail(); };
   box.querySelectorAll("[data-pedit]").forEach(b => b.onclick = () => { const p = profiles[b.dataset.pedit]; const fm = document.getElementById("pf");
-    ["name","driver","engine","chassis","season","front","rear","mass"].forEach(k => { if(fm.elements[k]) fm.elements[k].value = p[k] ?? ""; }); fm.elements.id.value = b.dataset.pedit; document.getElementById("pform").open = true; });
+    ["name","driver","engine","chassis","season","front","rear","mass","revision"].forEach(k => { if(fm.elements[k]) fm.elements[k].value = p[k] ?? ""; }); fm.elements.id.value = b.dataset.pedit; document.getElementById("pform").open = true; });
   box.querySelectorAll("[data-pdel]").forEach(b => b.onclick = async () => { if(!confirm("Dit profiel verwijderen? Sessies houden hun gegevens.")) return; delete profiles[b.dataset.pdel]; await saveProfiles(); renderProfiles(); renderDetail(); });
 }
 renderProfiles();
